@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from ..schemas.node import NodeConfig, NodeStatus, NodeCreate, NodeUpdate, NodeExpect
 from ..services.config import get_config, reload_nodes
 from ..services.scheduler import get_scheduler
-from ..services.availability import get_availability_service
+from ..services.availability import get_availability_service, AvailabilityService
 
 logger = logging.getLogger(__name__)
 
@@ -525,8 +525,13 @@ def update_node_status_from_result(name: str, result, node_info: dict = None):
 async def get_node_availability(name: str):
     """
     获取节点可用性统计
-    
+
     返回 24h/7d/30d 可用性百分比。
+
+    注意 7d/30d 的口径：内存只保留 48 小时记录，因此这两个数字
+    必须从聚合表读取；聚合表不可用（未迁移或未生成）时，
+    返回 None 而不是"用 48 小时数据算出来的 7 天值"——
+    后者看起来正常但其实是静默失真。
     """
     # 从数据库查找节点
     repo = _get_db_repository()
@@ -536,21 +541,52 @@ async def get_node_availability(name: str):
             node = await repo.get_node_by_name(name)
         except Exception as e:
             logger.error(f"从数据库获取单个节点失败: {e}")
-    
+
     if not node:
         raise HTTPException(
             status_code=404,
             detail={"code": "E003", "message": f"Node not found: {name}"},
         )
-    
+
     service = get_availability_service()
     stats = service.get_stats(name)
-    
+
+    # 长周期可用性来自聚合表（内存无法覆盖 7 天/30 天）
+    uptime_7d = None
+    uptime_30d = None
+    long_range_source = "unavailable"
+    if repo:
+        try:
+            agg_7d = await repo.get_aggregated_uptime(node_name=name, days=7)
+            if name in agg_7d:
+                uptime_7d = agg_7d[name]["uptime"]
+            agg_30d = await repo.get_aggregated_uptime(node_name=name, days=30)
+            if name in agg_30d:
+                uptime_30d = agg_30d[name]["uptime"]
+            if uptime_7d is not None or uptime_30d is not None:
+                long_range_source = "aggregates"
+        except Exception as e:
+            logger.warning(f"读取聚合可用性失败，长周期指标将不可用: {e}")
+
+    # 聚合表尚无数据时，仅在内存确实覆盖了该窗口的情况下才回退。
+    # 内存保留 48 小时，因此 7 天/30 天永远无法覆盖，此时保持 None。
+    if uptime_7d is None or uptime_30d is None:
+        coverage_hours = AvailabilityService.RETENTION_HOURS
+        if coverage_hours >= 24 * 7 and uptime_7d is None:
+            uptime_7d = stats.uptime_7d
+        if coverage_hours >= 24 * 30 and uptime_30d is None:
+            uptime_30d = stats.uptime_30d
+
     return {
         "node_name": name,
         "uptime_24h": stats.uptime_24h,
-        "uptime_7d": stats.uptime_7d,
-        "uptime_30d": stats.uptime_30d,
+        "uptime_7d": uptime_7d,
+        "uptime_30d": uptime_30d,
+        "long_range_source": long_range_source,
+        "long_range_note": (
+            None if long_range_source == "aggregates"
+            else "长周期可用性暂无数据：需先执行聚合任务将样本汇总到 aggregates 表"
+        ),
         "total_checks_24h": stats.total_checks_24h,
         "success_checks_24h": stats.success_checks_24h,
         "avg_latency_ms": stats.avg_latency_ms,

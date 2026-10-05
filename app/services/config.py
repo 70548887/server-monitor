@@ -98,6 +98,21 @@ class ServerConfig:
 
 
 @dataclass
+class RetentionConfig:
+    """
+    数据留存配置
+
+    样本表按每分钟每节点一行增长，100 个节点一年约 5000 万行。
+    此前 app.yaml 里配了 retention 段但没有对应代码解析，
+    清理方法也从未被调度，样本表会无限增长。
+    """
+    samples_days: int = 30        # 样本保留天数
+    aggregates_days: int = 90     # 聚合数据保留天数
+    cleanup_hour: int = 3         # 每日清理时刻（0-23）
+    enabled: bool = True          # 是否启用自动清理
+
+
+@dataclass
 class NodeExpectConfig:
     """节点期望配置"""
     status: int = 200
@@ -128,6 +143,7 @@ class AppConfig:
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
     
     nodes: list[NodeConfig] = field(default_factory=list)
 
@@ -275,6 +291,15 @@ def load_config(
         config.server = ServerConfig(
             host=server.get("host", "0.0.0.0"),
             port=server.get("port", 8080),
+        )
+
+        # 数据留存配置
+        retention = app_data.get("retention", {})
+        config.retention = RetentionConfig(
+            samples_days=retention.get("samples_days", 30),
+            aggregates_days=retention.get("aggregates_days", 90),
+            cleanup_hour=retention.get("cleanup_hour", 3),
+            enabled=retention.get("enabled", True),
         )
         
         logger.info(f"已加载应用配置: {app_config_path}")

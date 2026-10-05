@@ -175,6 +175,49 @@ class TestMySQLRepository:
         assert callable(without_retry._get_session_manager())
 
 
+class TestSchemaRegistration:
+    """表模型注册
+
+    create_all 只创建"已导入到 Base.metadata"的表。某个模型文件没被
+    导入时不会报错，只是静默地不建那张表 —— 运行到相关功能才失败。
+    这里显式锁定关键表必须在 metadata 中。
+    """
+
+    def test_all_tables_registered(self):
+        from app.models.base import Base
+        # 触发与生产启动路径一致的导入
+        import app.models.admin  # noqa: F401
+        from app.repositories.mysql_repository import get_mysql_repository  # noqa: F401
+
+        tables = set(Base.metadata.tables)
+        for expected in (
+            "admins", "nodes", "samples", "aggregates",
+            "notification_channels", "notification_logs",
+            "notification_recipients", "alert_logs", "alert_incidents",
+        ):
+            assert expected in tables, f"表 {expected} 未注册，create_all 不会创建它"
+
+    def test_incident_table_columns(self):
+        """事件表的关键列齐全 —— 缺列会让闸门逻辑静默失效"""
+        from app.models.base import Base
+        import app.models.admin  # noqa: F401
+        from app.models.notification_channel import AlertIncidentModel  # noqa: F401
+
+        cols = set(Base.metadata.tables["alert_incidents"].columns.keys())
+        for expected in ("next_notify_at", "notify_count", "status",
+                         "started_at", "resolved_at", "duration_seconds"):
+            assert expected in cols, f"alert_incidents 缺少列 {expected}"
+
+    def test_aggregate_table_columns(self):
+        from app.models.base import Base
+        from app.models.sample import AggregateModel  # noqa: F401
+
+        cols = set(Base.metadata.tables["aggregates"].columns.keys())
+        for expected in ("node_name", "window_start", "window_minutes",
+                         "total_count", "success_count", "availability"):
+            assert expected in cols, f"aggregates 缺少列 {expected}"
+
+
 class TestNodeRepositoryContract:
     """仓库接口契约（用假数据验证数据流，不连库）"""
 

@@ -83,10 +83,17 @@ logging:
   async_queue_size: 10000
 
 # 数据留存
+# 说明：样本表按"每分钟每节点一行"增长，100 个节点一年约 5000 万行，
+# 必须定期清理。以下配置由调度器强制执行：
+#   - aggregate_rollup   每小时把样本汇总到 aggregates 表
+#   - retention_cleanup  每日 cleanup_hour 点清理过期数据
+# 聚合表体积远小于原始样本，且是 7 天/30 天可用性的唯一数据来源
+# （内存只保留 48 小时），因此保留期设得更长。
 retention:
-  samples_days: 30          # 样本保留天数
-  aggregates_days: 90       # 聚合保留天数
-  cleanup_hour: 3           # 每日清理时间（小时）
+  enabled: true            # 关闭后样本表将无限增长，长周期可用性也不可用
+  samples_days: 30         # 原始样本保留天数
+  aggregates_days: 90      # 聚合快照保留天数
+  cleanup_hour: 3          # 每日清理时刻（小时，0-23）
 
 # 服务器配置
 server:

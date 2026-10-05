@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, func, and_, text, case, cast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -257,8 +257,216 @@ class MySQLRepository:
             )
             return 0
     
-    # ============= 节点 CRUD 操作 =============
-    
+    # ============= 聚合快照（长期可用性）=============
+
+    async def rollup_samples_to_aggregates(
+        self,
+        window_minutes: int = 5,
+        hours: int = 6,
+        lookback_minutes: Optional[int] = None,
+    ) -> dict:
+        """
+        把原始样本汇总为窗口聚合快照
+
+        为什么需要它：内存可用性服务只保留 48 小时记录，因此
+        uptime_7d / uptime_30d 此前实际拿到的是"残缺窗口"——只有最近
+        48 小时的数据参与计算，却按 7 天/30 天展示，属于静默失真。
+        聚合表按 5 分钟窗口长期保留，让长周期统计有真实数据来源。
+
+        实现上把分组与计数交给 MySQL（GROUP BY），只把每个窗口的
+        一行结果写回，避免把几十万条样本拉进 Python 内存。
+
+        Args:
+            window_minutes: 窗口大小（分钟）
+            hours: 回溯多少小时的数据参与汇总
+            lookback_minutes: 直接指定回溯分钟数（优先于 hours）
+
+        Returns:
+            {"windows": 处理的窗口数, "written": 写入行数, "samples": 覆盖样本数}
+        """
+        window_seconds = window_minutes * 60
+        lookback = lookback_minutes if lookback_minutes is not None else hours * 60
+
+        # 只汇总"已经结束"的窗口，避免把当前不完整的窗口写进去后又被覆盖
+        now = datetime.utcnow()
+        end_time = now - timedelta(seconds=window_seconds)
+        start_time = end_time - timedelta(minutes=lookback)
+
+        try:
+            async with self._get_session_manager() as session:
+                # SQL 侧按节点 + 窗口分组聚合
+                # 注意：用 UNIX_TIMESTAMP 的整除来做窗口对齐，
+                # 比字符串处理时间更可靠，也能命中 timestamp 索引。
+                bucket = func.floor(
+                    func.unix_timestamp(SampleModel.timestamp) / window_seconds
+                )
+
+                stmt = (
+                    select(
+                        SampleModel.node_name.label("node_name"),
+                        bucket.label("bucket"),
+                        func.count().label("total_count"),
+                        # 成功计数：把布尔列转成整数再求和。
+                        # 不用 func.case(...)：case 是顶层构造器，
+                        # 套进 func 会因 else_ 参数报 TypeError。
+                        func.sum(
+                            cast(SampleModel.success, Integer)
+                        ).label("success_count"),
+                        func.min(SampleModel.latency_ms).label("latency_min"),
+                        func.max(SampleModel.latency_ms).label("latency_max"),
+                        func.avg(SampleModel.latency_ms).label("latency_avg"),
+                    )
+                    .where(
+                        and_(
+                            SampleModel.timestamp >= start_time,
+                            SampleModel.timestamp < end_time,
+                        )
+                    )
+                    .group_by(SampleModel.node_name, bucket)
+                )
+
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                if not rows:
+                    return {"windows": 0, "written": 0, "samples": 0}
+
+                # 已存在的窗口先删除，保证重跑幂等
+                window_starts = [
+                    datetime.utcfromtimestamp(int(r.bucket) * window_seconds)
+                    for r in rows
+                ]
+                node_names = {r.node_name for r in rows}
+
+                await session.execute(
+                    delete(AggregateModel).where(
+                        and_(
+                            AggregateModel.node_name.in_(node_names),
+                            AggregateModel.window_start.in_(window_starts),
+                        )
+                    )
+                )
+
+                total_samples = 0
+                for r in rows:
+                    window_start = datetime.utcfromtimestamp(
+                        int(r.bucket) * window_seconds
+                    )
+                    total = int(r.total_count or 0)
+                    success = int(r.success_count or 0)
+                    total_samples += total
+
+                    session.add(AggregateModel(
+                        node_name=r.node_name,
+                        window_start=window_start,
+                        window_end=window_start + timedelta(seconds=window_seconds),
+                        window_minutes=window_minutes,
+                        total_count=total,
+                        success_count=success,
+                        error_count=total - success,
+                        error_rate=round((total - success) / total, 4) if total else 0.0,
+                        latency_min_ms=r.latency_min,
+                        latency_max_ms=r.latency_max,
+                        latency_avg_ms=round(r.latency_avg, 2) if r.latency_avg else None,
+                        # 窗口内的可用性比例；p50/p95/p99 需要样本级数据，
+                        # 这里不做近似，避免给出看起来精确却无依据的数字
+                        availability=round(success / total, 4) if total else 1.0,
+                    ))
+
+                await session.commit()
+
+                logger.info(
+                    f"聚合完成: {len(rows)} 个窗口, 覆盖 {total_samples} 条样本, "
+                    f"窗口大小 {window_minutes} 分钟"
+                )
+                return {
+                    "windows": len(rows),
+                    "written": len(rows),
+                    "samples": total_samples,
+                }
+
+        except SQLAlchemyError as e:
+            logger.error(
+                f"聚合样本失败: error_type={type(e).__name__}, error={e}"
+            )
+            return {"windows": 0, "written": 0, "samples": 0, "error": str(e)}
+        except Exception as e:
+            logger.error(
+                f"聚合样本异常: error_type={type(e).__name__}, error={e}"
+            )
+            return {"windows": 0, "written": 0, "samples": 0, "error": str(e)}
+
+    async def get_aggregated_uptime(
+        self,
+        node_name: Optional[str] = None,
+        days: int = 30,
+    ) -> dict:
+        """
+        从聚合表读取长周期可用性
+
+        Returns:
+            {node_name: {"uptime": 百分比, "total": 样本数, "success": 成功数}}
+            传入 node_name 时只返回该节点。
+        """
+        cutoff = datetime.utcnow() - timedelta(days=days)
+
+        try:
+            async with self._get_session_manager() as session:
+                stmt = (
+                    select(
+                        AggregateModel.node_name,
+                        func.sum(AggregateModel.total_count).label("total"),
+                        func.sum(AggregateModel.success_count).label("success"),
+                    )
+                    .where(AggregateModel.window_start >= cutoff)
+                    .group_by(AggregateModel.node_name)
+                )
+                if node_name:
+                    stmt = stmt.where(AggregateModel.node_name == node_name)
+
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                out = {}
+                for r in rows:
+                    total = int(r.total or 0)
+                    success = int(r.success or 0)
+                    out[r.node_name] = {
+                        "uptime": round((success / total) * 100, 3) if total else None,
+                        "total_checks": total,
+                        "success_checks": success,
+                    }
+                return out
+
+        except SQLAlchemyError as e:
+            logger.error(
+                f"读取聚合可用性失败: node={node_name}, days={days}, error={e}"
+            )
+            return {}
+        except Exception as e:
+            logger.error(f"读取聚合可用性异常: error={e}")
+            return {}
+
+    async def cleanup_old_aggregates(self, days: int = 90) -> int:
+        """清理过期聚合快照"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        try:
+            async with self._get_session_manager() as session:
+                result = await session.execute(
+                    delete(AggregateModel).where(AggregateModel.window_start < cutoff)
+                )
+                await session.commit()
+                count = result.rowcount
+                logger.info(f"Cleaned up {count} old aggregates (older than {days} days)")
+                return count
+        except SQLAlchemyError as e:
+            logger.error(f"Failed to cleanup old aggregates: {e}")
+            return 0
+        except Exception as e:
+            logger.error(f"Unexpected error cleaning up aggregates: {e}")
+            return 0
+
+    # ============= 节点 CRUD 操作 =============    
     async def get_all_nodes(self, include_deleted: bool = False) -> List[dict]:
         """
         获取所有节点

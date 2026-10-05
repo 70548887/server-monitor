@@ -8,6 +8,7 @@ from typing import Optional, Callable, Awaitable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from .config import get_config, NodeConfig, NodeExpectConfig
 from .heartbeat import HeartbeatService, HeartbeatResult
@@ -113,14 +114,99 @@ class SchedulerService:
             metrics.record_heartbeat_run(duration, success)
             metrics.scheduler_stats.status = "running" if success else "error"
     
+    async def _run_rollup_task(self):
+        """
+        把原始样本汇总为聚合快照
+
+        内存可用性服务只保留 48 小时记录，7 天/30 天可用性必须依赖聚合表。
+        每小时执行一次，汇总最近数小时的完整窗口（跳过当前不完整窗口）。
+        """
+        config = get_config()
+        if not config.retention.enabled:
+            logger.debug("留存功能已禁用，跳过聚合")
+            return
+
+        try:
+            from app.repositories.mysql_repository import get_mysql_repository
+            repo = get_mysql_repository()
+
+            # 追溯 3 小时，覆盖上次执行后可能遗漏的窗口；
+            # 重跑同一窗口是幂等的（先删后写）。
+            result = await repo.rollup_samples_to_aggregates(
+                window_minutes=5,
+                hours=3,
+            )
+
+            if result.get("windows"):
+                logger.info(
+                    f"聚合完成: {result['windows']} 个窗口, "
+                    f"覆盖 {result['samples']} 条样本"
+                )
+            else:
+                logger.debug("本轮无需聚合（无新样本或全部已汇总）")
+        except Exception as e:
+            logger.error(f"聚合任务失败: {e}", exc_info=True)
+
+    async def _run_cleanup_task(self):
+        """
+        执行数据留存清理
+
+        样本表按每分钟每节点一行增长，必须定期清理，否则会无限膨胀。
+        使用 CronTrigger 每日执行一次，默认凌晨 3 点（避开业务高峰）。
+        """
+        config = get_config()
+        retention = config.retention
+
+        if not retention.enabled:
+            logger.debug("数据留存清理已禁用，跳过")
+            return
+
+        start_time = time.perf_counter()
+        logger.info(
+            f"开始数据留存清理: 样本保留 {retention.samples_days} 天"
+        )
+
+        try:
+            from app.repositories.mysql_repository import get_mysql_repository
+            repo = get_mysql_repository()
+
+            deleted = await repo.cleanup_old_samples(days=retention.samples_days)
+
+            # 聚合快照保留更久（体积远小于原始样本）
+            try:
+                agg_deleted = await repo.cleanup_old_aggregates(
+                    days=retention.aggregates_days
+                )
+            except Exception as e:
+                agg_deleted = 0
+                logger.warning(f"清理聚合快照失败（不影响样本清理）: {e}")
+
+            # 通知发送记录同样需要清理，否则日志表也会持续增长
+            try:
+                from app.services.notification import NotificationLogService
+                logs_deleted = await NotificationLogService.cleanup_old_logs(
+                    days=retention.samples_days
+                )
+            except Exception as e:
+                logs_deleted = 0
+                logger.warning(f"清理通知记录失败（不影响样本清理）: {e}")
+
+            duration = time.perf_counter() - start_time
+            logger.info(
+                f"数据留存清理完成: 删除样本 {deleted} 条、聚合 {agg_deleted} 条、"
+                f"通知记录 {logs_deleted} 条, 耗时 {duration:.2f}s"
+            )
+        except Exception as e:
+            logger.error(f"数据留存清理失败: {e}", exc_info=True)
+
     def start(self):
         """启动调度器"""
         if self._running:
             logger.warning("调度器已在运行")
             return
-        
+
         self._scheduler = AsyncIOScheduler()
-        
+
         # 添加心跳任务
         self._scheduler.add_job(
             self._run_heartbeat_task,
@@ -130,11 +216,45 @@ class SchedulerService:
             replace_existing=True,
             max_instances=1,  # 防止任务堆积
         )
-        
+
+        # 添加数据留存清理任务（每日一次）
+        config = get_config()
+        retention = config.retention
+        if retention.enabled:
+            # 聚合任务：每小时把原始样本汇总到 aggregates 表，
+            # 为 7 天/30 天可用性提供数据来源（内存只保留 48 小时）
+            self._scheduler.add_job(
+                self._run_rollup_task,
+                trigger=CronTrigger(minute=5),  # 每小时第 5 分钟
+                id="aggregate_rollup",
+                name="Sample Aggregation",
+                replace_existing=True,
+                max_instances=1,
+            )
+
+            self._scheduler.add_job(
+                self._run_cleanup_task,
+                trigger=CronTrigger(
+                    hour=retention.cleanup_hour,
+                    minute=0,
+                ),
+                id="retention_cleanup",
+                name="Data Retention Cleanup",
+                replace_existing=True,
+                max_instances=1,
+            )
+            logger.info(
+                f"已注册数据留存任务: 聚合每小时执行，"
+                f"清理每日 {retention.cleanup_hour}:00 执行，"
+                f"样本保留 {retention.samples_days} 天、聚合保留 {retention.aggregates_days} 天"
+            )
+        else:
+            logger.warning("数据留存功能已禁用，样本表将无限增长且长周期可用性不可用")
+
         self._scheduler.start()
         self._running = True
         metrics.scheduler_stats.status = "running"
-        
+
         logger.info(f"调度器已启动: 间隔={self.interval_seconds}秒")
     
     def stop(self):
