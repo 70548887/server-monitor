@@ -1,0 +1,103 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/alerts.css">
+{% endblock %}
+
+
+{% block content %}
+<div class="alerts-page">
+    <h1>告警列表</h1>
+    
+    <!-- 统计卡片 -->
+    <div class="stats-cards" style="display:flex;gap:20px;margin-bottom:20px;">
+        <div class="stat-card" style="border-left-color:#dc3545;">
+            <div class="stat-label">活跃告警</div>
+            <div class="stat-value" id="alert-active-count" style="color:#dc3545;">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">今日告警</div>
+            <div class="stat-value" id="alert-today-total">0</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#dc3545;">
+            <div class="stat-label">节点离线</div>
+            <div class="stat-value" id="alert-node-down" style="color:#dc3545;">0</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#28a745;">
+            <div class="stat-label">节点恢复</div>
+            <div class="stat-value" id="alert-node-recovery" style="color:#28a745;">0</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#ffc107;">
+            <div class="stat-label">延迟告警</div>
+            <div class="stat-value" id="alert-latency-high" style="color:#ffc107;">0</div>
+        </div>
+    </div>
+    
+    <!-- 过滤器 -->
+    <div class="filters" style="margin-bottom:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <select id="alert-filter-type" style="padding:5px 10px;">
+            <option value="">全部类型</option>
+            <option value="node_down">节点离线</option>
+            <option value="node_recovery">节点恢复</option>
+            <option value="latency_high">延迟告警</option>
+        </select>
+        <select id="alert-filter-status" style="padding:5px 10px;">
+            <option value="">全部状态</option>
+            <option value="active">活跃</option>
+            <option value="acknowledged">已确认</option>
+            <option value="resolved">已解决</option>
+        </select>
+        <div class="date-range-group" style="display:flex;gap:5px;align-items:center;">
+            <input type="date" id="alert-filter-start" style="padding:5px 10px;" title="开始日期">
+            <span>至</span>
+            <input type="date" id="alert-filter-end" style="padding:5px 10px;" title="结束日期">
+        </div>
+        <div class="quick-date-btns" style="display:flex;gap:5px;">
+            <button class="btn btn-sm btn-outline" onclick="setDateRange('today')" title="今天">今天</button>
+            <button class="btn btn-sm btn-outline" onclick="setDateRange('week')" title="最近7天">近7天</button>
+            <button class="btn btn-sm btn-outline" onclick="setDateRange('month')" title="最近30天">近30天</button>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="loadAlerts()">查询</button>
+        <button class="btn btn-sm btn-secondary" onclick="resetFilters()">重置</button>
+        <div style="flex:1;"></div>
+        <button class="btn btn-sm btn-danger" id="batch-delete-btn" onclick="batchDeleteAlerts()" style="display:none;">
+            删除选中 (<span id="selected-count">0</span>)
+        </button>
+    </div>
+    
+    <table class="table">
+        <thead>
+            <tr>
+                <th style="width:40px;"><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
+                <th>触发时间</th>
+                <th>告警类型</th>
+                <th>节点</th>
+                <th>告警消息</th>
+                <th>通知状态</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="alerts-tbody"></tbody>
+    </table>
+    
+    <div id="alerts-empty" class="empty-state" style="display:none;">
+        <p>暂无告警记录</p>
+    </div>
+    
+    <!-- 分页 -->
+    <div class="pagination" style="margin-top:15px;display:flex;justify-content:space-between;align-items:center;">
+        <span id="alerts-info">共 0 条记录</span>
+        <div>
+            <button class="btn btn-sm" id="alerts-prev" onclick="loadAlerts(alertsOffset - 50)" disabled>上一页</button>
+            <button class="btn btn-sm" id="alerts-next" onclick="loadAlerts(alertsOffset + 50)">下一页</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/alerts.js"></script>
+{% endblock %}

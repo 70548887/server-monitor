@@ -1,0 +1,96 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/node_detail.css">
+{% endblock %}
+
+
+{% block content %}
+<div class="node-detail">
+    <h1>节点详情: {{ node.name }}</h1>
+    
+    <div class="detail-header">
+        <a href="/ui/nodes" class="btn btn-secondary">&larr; 返回列表</a>
+        <button class="btn btn-primary" onclick="pingNode('{{ node.name }}')">立即检测</button>
+    </div>
+    
+    <div class="section">
+        <h2>基本信息</h2>
+        <div class="info-grid info-grid-6">
+            <div class="info-item">
+                <label>名称</label>
+                <span>{{ node.name }}</span>
+            </div>
+            <div class="info-item info-item-wide">
+                <label>URL</label>
+                <span class="url">{{ node.url }}</span>
+            </div>
+            <div class="info-item">
+                <label>区域</label>
+                <span>{{ node.region }}</span>
+            </div>
+            <div class="info-item">
+                <label>超时</label>
+                <span>{{ node.timeout_ms }}ms</span>
+            </div>
+            <div class="info-item">
+                <label>状态</label>
+                <span class="badge {% if node.enabled %}badge-success{% else %}badge-secondary{% endif %}">
+                    {{ '已启用' if node.enabled else '已禁用' }}
+                </span>
+            </div>
+            <div class="info-item">
+                <label>标签</label>
+                <span>
+                    {% for tag in node.tags %}
+                    <span class="tag">{{ tag }}</span>
+                    {% endfor %}
+                    {% if not node.tags %}
+                    <span class="text-muted">-</span>
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>期望值</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>期望状态码</label>
+                <span>{{ node.expect.status }}</span>
+            </div>
+            <div class="info-item">
+                <label>响应包含</label>
+                <span>{{ node.expect.body_contains or '-' }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>最新检测结果</h2>
+        <div id="latestResult" class="result-box">
+            <p>点击"立即检测"查看结果</p>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>延迟趋势</h2>
+        <div class="chart-container">
+            <canvas id="nodeLatencyChart"></canvas>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script src="/static/js/node_detail.js"></script>
+<script>
+    // 页面加载时加载图表
+    document.addEventListener('DOMContentLoaded', () => {
+        loadNodeLatencyChart({{ node.name | tojson | safe }});
+    });
+</script>
+{% endblock %}
+{% endblock %}

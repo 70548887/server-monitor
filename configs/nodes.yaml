@@ -1,0 +1,60 @@
+# 服务器监控面板 - 节点配置
+# 在此配置需要监控的服务器心跳接口
+
+nodes:
+  # 示例节点配置
+  - name: "api-gateway-01"
+    url: "https://api.example.com/health"
+    region: "cn-shanghai"
+    tags:
+      - core
+      - gateway
+    timeout_ms: 3000
+    enabled: true
+    expect:
+      status: 200
+      body_contains: "ok"
+
+  - name: "user-service-01"
+    url: "https://user.example.com/healthz"
+    region: "cn-shanghai"
+    tags:
+      - core
+      - user
+    timeout_ms: 2000
+    enabled: true
+    expect:
+      status: 200
+
+  - name: "order-service-01"
+    url: "https://order.example.com/health"
+    region: "cn-beijing"
+    tags:
+      - core
+      - order
+    timeout_ms: 2000
+    enabled: true
+    expect:
+      status: 200
+
+  # 批量生成示例（实际使用时替换为真实 URL）
+  - name: "service-04"
+    url: "https://s4.example.com/ping"
+    region: "cn-shanghai"
+    tags: [service]
+    timeout_ms: 2000
+    enabled: true
+    expect:
+      status: 200
+
+  - name: "service-05"
+    url: "https://s5.example.com/ping"
+    region: "cn-beijing"
+    tags: [service]
+    timeout_ms: 2000
+    enabled: true
+    expect:
+      status: 200
+
+# 更多节点可按上述格式添加...
+# 支持最多 100+ 个节点

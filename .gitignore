@@ -1,0 +1,61 @@
+# ===== 敏感信息（绝不提交）=====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+ENV/
+
+# ===== 测试 =====
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ===== 日志与运行时数据 =====
+logs/
+*.log
+logs/*.log.*
+
+# ===== 备份归档 =====
+*.rar
+*.zip
+*.tar.gz
+*.bak
+*.tmp
+*.orig
+
+# 配置写回时可能残留的临时文件
+configs/*.yaml.tmp
+
+# ===== 编辑器 / 系统 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 本地临时脚本 =====
+_verify_*.py
+_ladder_check.py
+_check_config.py
+_l*.py
+scratch/

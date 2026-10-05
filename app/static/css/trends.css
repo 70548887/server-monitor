@@ -1,0 +1,128 @@
+/* 趋势分析页面样式 */
+.trends-page h1 {
+    margin-bottom: 1.5rem;
+}
+
+.trends-filters {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-end;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: var(--card-bg);
+    border-radius: 0.5rem;
+    border: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filter-group label {
+    font-weight: 500;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.filter-group select {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--card-bg);
+    color: var(--text);
+    min-width: 120px;
+}
+
+/* 节点选择器 */
+.node-selector {
+    position: relative;
+    min-width: 300px;
+}
+
+.selected-nodes {
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--card-bg);
+    min-height: 38px;
+    cursor: pointer;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.selected-nodes .placeholder {
+    color: var(--text-muted);
+}
+
+.selected-tag {
+    background: #dbeafe;
+    color: #1d4ed8;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+}
+
+.node-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    z-index: 100;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.node-dropdown-header {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 0.5rem;
+}
+
+.node-list {
+    padding: 0.5rem;
+}
+
+.node-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0.5rem;
+    cursor: pointer;
+    border-radius: 0.25rem;
+}
+
+.node-option:hover {
+    background: var(--bg);
+}
+
+.node-option input {
+    cursor: pointer;
+}
+
+/* 统计表格 */
+.stats-table-wrapper {
+    overflow-x: auto;
+}
+
+.highlight-row {
+    background: rgba(239, 68, 68, 0.1) !important;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* 大图表容器 */
+.chart-large {
+    height: 450px;
+    background: #1a1a2e;
+}

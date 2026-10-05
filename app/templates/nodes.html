@@ -1,0 +1,189 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="nodes-page">
+    <h1>节点列表</h1>
+    
+    <!-- 筛选器 -->
+    <div class="filters">
+        <form method="get" class="filter-form">
+            <select name="region" onchange="this.form.submit()">
+                <option value="">所有区域</option>
+                {% for r in all_regions %}
+                <option value="{{ r }}" {% if filters.region == r %}selected{% endif %}>{{ r }}</option>
+                {% endfor %}
+            </select>
+            
+            <select name="tag" onchange="this.form.submit()">
+                <option value="">所有标签</option>
+                {% for t in all_tags %}
+                <option value="{{ t }}" {% if filters.tag == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+            
+            <button type="button" class="btn btn-primary" onclick="location.href='/ui/nodes'">重置</button>
+        </form>
+        
+        <div class="actions">
+            <button class="btn btn-success" onclick="showAddNodeModal()">添加节点</button>
+        </div>
+    </div>
+    
+    <!-- 节点表格 -->
+    <div class="table-wrapper">
+    <table class="table" id="nodes-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>名称</th>
+                <th>URL</th>
+                <th>区域</th>
+                <th>标签</th>
+                <th>可用性 (24h)</th>
+                <th>趋势 (24h)</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for node in nodes %}
+            <tr data-node="{{ node.name }}">
+                <td class="index-cell">{{ loop.index }}</td>
+                <td class="name-cell" title="{{ node.name }}"><a href="/ui/nodes/{{ node.name }}">{{ node.name }}</a></td>
+                <td class="url-cell" title="{{ node.url }}">{{ node.url[:40] }}{% if node.url|length > 40 %}...{% endif %}</td>
+                <td>{{ node.region }}</td>
+                <td class="tags-cell">
+                    {% for tag in node.tags %}
+                    <span class="tag">{{ tag }}</span>
+                    {% endfor %}
+                    {% if not node.tags %}
+                    <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
+                <td class="uptime-cell" data-node="{{ node.name }}">
+                    <span class="uptime-value">--</span>
+                </td>
+                <td class="trend-cell" data-node="{{ node.name }}">
+                    <div class="trend-bar"></div>
+                </td>
+                <td class="status-cell" data-node="{{ node.name }}">
+                    <span class="badge {% if node.enabled %}badge-secondary{% else %}badge-secondary{% endif %}">
+                        {{ '已启用' if node.enabled else '已禁用' }}
+                    </span>
+                </td>
+                <td class="actions-cell">
+                    <button class="btn btn-sm btn-info" onclick="pingNode('{{ node.name }}')">Ping</button>
+                    <button class="btn btn-sm btn-primary" onclick="showEditNodeModal('{{ node.name }}')">编辑</button>
+                    <button class="btn btn-sm btn-warning" onclick="toggleNode('{{ node.name }}', {{ 'false' if node.enabled else 'true' }})">
+                        {{ '禁用' if node.enabled else '启用' }}
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteNode('{{ node.name }}')">删除</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    
+    {% if not nodes %}
+    <div class="empty-state">
+        <p>暂无节点数据</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 添加节点模态框 -->
+<div id="addNodeModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h2>添加监控节点</h2>
+        <form id="addNodeForm">
+            <div class="form-group">
+                <label>名称 <span class="required">*</span></label>
+                <input type="text" name="name" required placeholder="api-server-01">
+            </div>
+            <div class="form-group">
+                <label>URL <span class="required">*</span></label>
+                <input type="url" name="url" required placeholder="https://example.com/health">
+            </div>
+            <div class="form-group">
+                <label>区域</label>
+                <input type="text" name="region" value="default" placeholder="如: cn-east, us-west">
+            </div>
+            <div class="form-group">
+                <label>标签</label>
+                <input type="text" name="tags" placeholder="多个标签用英文逗号分隔，如: api,production">
+                <small class="form-hint">多个标签用英文逗号分隔</small>
+            </div>
+            <div class="form-group">
+                <label>超时(ms)</label>
+                <input type="number" name="timeout_ms" value="2000" min="100" max="30000">
+            </div>
+            <div class="form-group">
+                <label>期望状态码</label>
+                <input type="number" name="expect_status" value="200" min="100" max="599">
+            </div>
+            <div class="form-group">
+                <label>响应包含</label>
+                <input type="text" name="expect_body_contains" placeholder="可选，如: ok, success">
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">添加</button>
+                <button type="button" class="btn btn-secondary" onclick="hideAddNodeModal()">取消</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 编辑节点模态框 -->
+<div id="editNodeModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <h2>编辑节点: <span id="editNodeName"></span></h2>
+        <form id="editNodeForm">
+            <input type="hidden" name="originalName" id="editOriginalName">
+            <div class="form-group">
+                <label>URL <span class="required">*</span></label>
+                <input type="url" name="url" id="editUrl" required placeholder="https://example.com/health">
+            </div>
+            <div class="form-group">
+                <label>区域</label>
+                <input type="text" name="region" id="editRegion" placeholder="如: cn-east, us-west">
+            </div>
+            <div class="form-group">
+                <label>标签</label>
+                <input type="text" name="tags" id="editTags" placeholder="多个标签用英文逗号分隔">
+                <small class="form-hint">多个标签用英文逗号分隔，如: api,production</small>
+                <div id="editTagsPreview" class="tags-preview"></div>
+            </div>
+            <div class="form-group">
+                <label>超时(ms)</label>
+                <input type="number" name="timeout_ms" id="editTimeout" value="2000" min="100" max="30000">
+            </div>
+            <div class="form-group">
+                <label>期望状态码</label>
+                <input type="number" name="expect_status" id="editExpectStatus" value="200" min="100" max="599">
+            </div>
+            <div class="form-group">
+                <label>响应包含</label>
+                <input type="text" name="expect_body_contains" id="editExpectBody" placeholder="可选">
+            </div>
+            <div class="form-group">
+                <label>启用状态</label>
+                <select name="enabled" id="editEnabled">
+                    <option value="true">启用</option>
+                    <option value="false">禁用</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">保存</button>
+                <button type="button" class="btn btn-secondary" onclick="hideEditNodeModal()">取消</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% block scripts %}
+<script src="/static/js/nodes.js"></script>
+{% endblock %}
+{% endblock %}

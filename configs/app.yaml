@@ -1,0 +1,94 @@
+# 服务器监控面板 - 应用配置
+
+# 应用信息
+app:
+  name: "server-monitor"
+  version: "1.0.0"
+  debug: false
+
+# 数据库配置
+# 注意：敏感信息（密码）建议通过环境变量配置，参见 .env.example
+# 环境变量优先级高于此文件
+database:
+  # 可选: mysql, redis, hybrid
+  engine: mysql
+  mysql:
+    host: "127.0.0.1"     # 可用环境变量 MYSQL_HOST 覆盖
+    port: 3306            # 可用环境变量 MYSQL_PORT 覆盖
+    user: "root"          # 可用环境变量 MYSQL_USER 覆盖
+    password: ""          # 建议用环境变量 MYSQL_PASSWORD
+    database: "server_monitor"  # 可用环境变量 MYSQL_DATABASE 覆盖
+    pool_size: 10
+    pool_recycle: 1800
+  redis:
+    host: "localhost"     # 可用环境变量 REDIS_HOST 覆盖
+    port: 6379            # 可用环境变量 REDIS_PORT 覆盖
+    db: 0
+    password: ""          # 可用环境变量 REDIS_PASSWORD 覆盖
+    prefix: "srvmon:"
+
+# 调度器配置
+scheduler:
+  interval_seconds: 60      # 心跳检测间隔（秒）
+  concurrency: 50           # 最大并发数
+  timeout_seconds: 5        # 默认超时时间
+  retry_count: 3            # 重试次数
+  retry_delay_ms: 200       # 重试初始延迟（毫秒）
+
+# 告警配置
+alerting:
+  enabled: true
+  consecutive_failures: 3    # 连续失败N次触发告警
+  latency_p95_ms: 2000       # p95延迟阈值（毫秒）
+  error_rate_threshold: 0.05 # 错误率阈值（5%）
+
+  # ===== 事件化提醒节奏（主控）=====
+  # 一次故障 = 一个事件。提醒节奏由"距事件开始的时间"决定，
+  # 与自然日无关 —— 跨午夜不会重新爆发，进程重启后节奏延续。
+  #
+  # reminder_intervals_minutes: 距事件开始多久提醒一次（分钟）
+  #   下面这组 = 立即 / 1h / 5h / 13h / 25h，之后每 intervals_loop_minutes 循环
+  #   前期密集（确保有人看见），后期稀疏（不再刷屏）
+  reminder_intervals_minutes: [0, 60, 240, 480, 720]
+  intervals_loop_minutes: 720    # 走完阶梯后的循环间隔（12h）
+  # 单个事件的通知次数上限，0 = 不限（由阶梯自然收敛）
+  max_notifications_per_incident: 0
+
+  # suppress_minutes 现在只管 node_recovery 与 latency_high 这类
+  # 容易抖动的告警；node_down 的节奏完全由上面的阶梯控制。
+  suppress_minutes: 240
+  suppress_persist: true     # 抑制状态写入 Redis，跨进程重启保持
+  window_minutes: 5          # 统计窗口（分钟）
+  channels:
+    webhook:
+      enabled: false
+      url: ""
+    email:
+      enabled: false
+      smtp_host: ""
+      smtp_port: 587
+      username: ""
+      password: ""
+      recipients: []
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "json"            # json 或 text
+  file:
+    enabled: true
+    path: "logs/app.log"
+    max_size_mb: 100
+    backup_count: 7
+  async_queue_size: 10000
+
+# 数据留存
+retention:
+  samples_days: 30          # 样本保留天数
+  aggregates_days: 90       # 聚合保留天数
+  cleanup_hour: 3           # 每日清理时间（小时）
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8080

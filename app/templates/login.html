@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 服务器监控面板</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/login.css">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="theme-toggle" id="themeToggle" title="切换昼夜模式">
+            <svg id="themeIcon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- 初始显示太阳 (白天模式) -->
+                <path id="moonPath" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" style="display:none"></path>
+                <!-- 太阳图标路径 -->
+                <circle id="sunCircle" cx="12" cy="12" r="5"></circle>
+                <line id="sunLine1" x1="12" y1="1" x2="12" y2="3"></line>
+                <line id="sunLine2" x1="12" y1="21" x2="12" y2="23"></line>
+                <line id="sunLine3" x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line id="sunLine4" x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line id="sunLine5" x1="1" y1="12" x2="3" y2="12"></line>
+                <line id="sunLine6" x1="21" y1="12" x2="23" y2="12"></line>
+                <line id="sunLine7" x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line id="sunLine8" x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+        </div>
+        <div class="login-header">
+            <h1>服务器监控面板</h1>
+            <p>Server Monitor Dashboard</p>
+        </div>
+        
+        {% if error %}
+        <div class="error-message">
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        <form method="post" action="/login">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" required 
+                       autocomplete="username" placeholder="请输入用户名">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" required 
+                       autocomplete="current-password" placeholder="请输入密码">
+            </div>
+
+            <div id="captcha-container" style="margin-bottom: 20px;"></div>
+            
+            <input type="hidden" id="captcha_id" name="captcha_id">
+            <input type="hidden" id="captcha_x" name="captcha_x">
+            
+            <button type="submit" class="btn-login" id="loginBtn" disabled>登 录</button>
+        </form>
+        
+    </div>
+
+    <script src="/static/js/login.js"></script>
+</body>
+</html>

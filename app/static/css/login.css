@@ -1,0 +1,297 @@
+:root {
+    --login-bg: linear-gradient(135deg, #f0f2f5 0%, #e5e7eb 100%);
+    --card-bg: #ffffff;
+    --input-bg: #f9fafb;
+    --input-border: #d1d5db;
+    --text-main: #111827;
+    --text-sub: #6b7280;
+    --text-label: #374151;
+    --primary: #22c55e;
+    --primary-hover: #16a34a;
+    --btn-text: #fff;
+}
+
+body.dark-mode {
+    --login-bg: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    --card-bg: #1e1e2d;
+    --input-bg: #252535;
+    --input-border: #333;
+    --text-main: #fff;
+    --text-sub: #888;
+    --text-label: #ccc;
+    --primary: #4ade80;
+    --primary-hover: #22c55e;
+    --btn-text: #000;
+}
+
+.login-body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    background: var(--login-bg);
+    transition: background 0.3s;
+}
+
+.login-container {
+    background: var(--card-bg);
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    max-width: 400px;
+    position: relative;
+    transition: background 0.3s, box-shadow 0.3s;
+}
+
+.theme-toggle {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.theme-toggle:hover {
+    transform: scale(1.1);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.login-header h1 {
+    color: var(--primary);
+    font-size: 1.8rem;
+    margin: 0 0 10px 0;
+}
+
+.login-header p {
+    color: var(--text-sub);
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    color: var(--text-label);
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px 15px;
+    border: 1px solid var(--input-border);
+    border-radius: 8px;
+    background: var(--input-bg);
+    color: var(--text-main);
+    font-size: 1rem;
+    box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.3s, color 0.3s;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
+}
+
+#captcha {
+    margin-bottom: 20px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    min-height: 50px;
+}
+
+#captcha > * {
+    width: 100% !important;
+}
+
+.btn-login {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+    border: none;
+    border-radius: 8px;
+    color: var(--btn-text);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn-login:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 20px rgba(74, 222, 128, 0.3);
+}
+
+.btn-login:active {
+    transform: translateY(0);
+}
+
+.btn-login:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* 滑动验证码样式 */
+#captcha-container {
+    user-select: none;
+    position: relative;
+}
+
+.slider-captcha {
+    width: 310px;
+    margin: 0 auto;
+}
+
+.slider-bg-container {
+    position: relative;
+    width: 310px;
+    height: 155px;
+    background: #eee;
+    overflow: hidden;
+    border-radius: 4px;
+}
+
+.slider-bg-img {
+    width: 310px;
+    height: 155px;
+    display: block;
+}
+
+.slider-piece-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 10;
+    width: 50px;
+    height: 50px;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+}
+
+.slider-track {
+    position: relative;
+    width: 310px;
+    height: 40px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 20px;
+    margin-top: 15px;
+    overflow: hidden; /* 确保填充层不超出圆角 */
+}
+
+.slider-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 100%;
+    background: #dcfce7; /* 浅绿色背景，完全不透明以盖住文字 */
+    border-right: 2px solid var(--primary);
+    transition: background 0.2s;
+    z-index: 2; /* 位于文字之上 */
+}
+
+body.dark-mode .slider-fill {
+    background: #064e3b; /* 深色模式下的覆盖背景 */
+}
+
+.slider-handle {
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 40px;
+    height: 40px;
+    background: var(--primary);
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    z-index: 20;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    transition: background 0.2s;
+}
+
+.slider-handle:hover {
+    background: var(--primary-hover);
+}
+
+.slider-text {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--text-sub);
+    position: relative;
+    z-index: 1; /* 位于最底层 */
+}
+
+.slider-success {
+    border-color: var(--primary);
+}
+
+.slider-success .slider-fill {
+    background: var(--primary); /* 成功后变为深绿色 */
+    border-right: none;
+}
+
+.slider-success .slider-handle {
+    background: var(--primary);
+}
+
+.slider-error {
+    animation: shake 0.3s ease-in-out;
+    border-color: #ef4444;
+}
+
+.slider-error .slider-fill {
+    background: rgba(239, 68, 68, 0.1);
+    border-right-color: #ef4444;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-5px); }
+    40%, 80% { transform: translateX(5px); }
+}
+
+.error-message {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid #ef4444;
+    color: #ef4444;
+    padding: 12px 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.footer-text {
+    text-align: center;
+    margin-top: 25px;
+    color: #666;
+    font-size: 0.8rem;
+}

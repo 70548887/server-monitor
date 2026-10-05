@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}服务器监控面板{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <!-- Chart.js (Localized) -->
+    <script src="/static/js/chart.umd.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/ui/">服务器监控面板</a>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/ui/dashboard" class="{% if request.url.path == '/ui/dashboard' or request.url.path == '/ui/' %}active{% endif %}">总览</a></li>
+            <li><a href="/ui/nodes" class="{% if '/ui/nodes' in request.url.path and '/ui/nodes/' not in request.url.path %}active{% endif %}">节点</a></li>
+            <li><a href="/ui/trends" class="{% if request.url.path == '/ui/trends' %}active{% endif %}">趋势</a></li>
+            <li><a href="/ui/alerts" class="{% if request.url.path == '/ui/alerts' %}active{% endif %}">告警</a></li>
+            <li><a href="/ui/notifications" class="{% if request.url.path == '/ui/notifications' %}active{% endif %}">通知</a></li>
+            <li><a href="/metrics" target="_blank">指标</a></li>
+            <li><a href="/healthz" target="_blank">健康</a></li>
+            <li class="nav-divider"></li>
+            <li><a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">设置</a></li>
+            <li><a href="/logout" class="nav-logout">登出</a></li>
+        </ul>
+    </nav>
+    
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <footer class="footer">
+        <p>Server Monitor v1.0.0 | <span id="uptime"></span></p>
+    </footer>
+    
+    <!-- 主题切换按钮 -->
+    <button class="theme-toggle" id="themeToggle" title="切换主题">
+        <svg viewBox="0 0 24 24" id="moonIcon" style="display:none;">
+            <path id="moonPath" fill="currentColor" d="M17.75,4.09L15.22,6.03L16.13,9.09L13.5,7.28L10.87,9.09L11.78,6.03L9.25,4.09L12.44,4L13.5,1L14.56,4L17.75,4.09M21.25,11L19.61,12.25L20.2,14.23L18.5,13.06L16.8,14.23L17.39,12.25L15.75,11L17.81,10.95L18.5,9L19.19,10.95L21.25,11M18.97,15.95C19.8,15.87 20.69,17.05 20.16,17.8C19.84,18.25 19.5,18.67 19.08,19.07C15.17,23 8.84,23 4.94,19.07C1.03,15.17 1.03,8.83 4.94,4.93C5.34,4.53 5.76,4.17 6.21,3.85C6.96,3.32 8.14,4.21 8.06,5.04C7.79,7.9 8.75,10.87 10.95,13.06C13.14,15.26 16.1,16.22 18.97,15.95M17.33,17.97C14.5,17.81 11.7,16.64 9.53,14.5C7.36,12.31 6.2,9.5 6.04,6.68C3.23,9.82 3.34,14.64 6.35,17.66C9.37,20.67 14.19,20.78 17.33,17.97Z"/>
+        </svg>
+        <svg viewBox="0 0 24 24" id="sunIcon">
+            <circle id="sunCircle" cx="12" cy="12" r="5" fill="currentColor"/>
+            <line id="sunLine1" x1="12" y1="1" x2="12" y2="3" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine2" x1="12" y1="21" x2="12" y2="23" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine3" x1="4.22" y1="4.22" x2="5.64" y2="5.64" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine4" x1="18.36" y1="18.36" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine5" x1="1" y1="12" x2="3" y2="12" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine6" x1="21" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine7" x1="4.22" y1="19.78" x2="5.64" y2="18.36" stroke="currentColor" stroke-width="2"/>
+            <line id="sunLine8" x1="18.36" y1="5.64" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2"/>
+        </svg>
+    </button>
+    
+    <script src="/static/js/common.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

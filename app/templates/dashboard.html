@@ -1,0 +1,135 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1>监控总览</h1>
+    
+    <!-- 状态卡片 -->
+    <div class="status-cards">
+        <div class="card {% if health.status == 'healthy' %}card-success{% elif health.status == 'degraded' %}card-warning{% else %}card-danger{% endif %}">
+            <h3>系统状态</h3>
+            <p class="status-value">{% if health.status == 'healthy' %}正常{% elif health.status == 'degraded' %}降级{% else %}异常{% endif %}</p>
+        </div>
+        
+        <div class="card">
+            <h3>运行时长</h3>
+            <p class="status-value" id="uptime-display">{{ stats.uptime_seconds }}s</p>
+        </div>
+        
+        <div class="card">
+            <h3>节点总数</h3>
+            <p class="status-value">{{ stats.total_nodes }}</p>
+        </div>
+        
+        <div class="card">
+            <h3>启用节点</h3>
+            <p class="status-value">{{ stats.enabled_nodes }}</p>
+        </div>
+    </div>
+    
+    <!-- 组件状态 -->
+    <div class="section">
+        <div class="section-header">
+            <h2>组件状态</h2>
+            <button id="ping-storage-btn" class="btn btn-primary" onclick="pingStorage()">
+                检测存储
+            </button>
+        </div>
+        <table class="table" id="component-table">
+            <thead>
+                <tr>
+                    <th>组件</th>
+                    <th>状态</th>
+                    <th>延迟</th>
+                    <th>详情</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>MySQL</td>
+                    <td>
+                        <span class="badge {% if health.components.mysql.status == 'up' %}badge-success{% else %}badge-danger{% endif %}">
+                            {% if health.components.mysql.status == 'up' %}正常{% else %}异常{% endif %}
+                        </span>
+                    </td>
+                    <td>{{ health.components.mysql.latency_ms }}ms</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>Redis</td>
+                    <td>
+                        <span class="badge {% if health.components.redis.status == 'up' %}badge-success{% elif health.components.redis.status == 'unknown' %}badge-warning{% else %}badge-danger{% endif %}">
+                            {% if health.components.redis.status == 'up' %}正常{% elif health.components.redis.status == 'unknown' %}未知{% else %}异常{% endif %}
+                        </span>
+                    </td>
+                    <td>{{ health.components.redis.latency_ms }}ms</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>调度器</td>
+                    <td>
+                        <span class="badge {% if health.components.scheduler.status == 'running' %}badge-success{% elif health.components.scheduler.status == 'stopped' %}badge-warning{% else %}badge-danger{% endif %}">
+                            {% if health.components.scheduler.status == 'running' %}运行中{% elif health.components.scheduler.status == 'stopped' %}已停止{% else %}异常{% endif %}
+                        </span>
+                    </td>
+                    <td>-</td>
+                    <td>执行: {{ health.components.scheduler.runs_total }} 次, 异常: {{ health.components.scheduler.errors_total }} 次</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- 调度器状态 -->
+    <div class="section">
+        <h2>调度器</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>运行状态</label>
+                <span>{% if scheduler.stats.status == 'running' %}运行中{% elif scheduler.stats.status == 'stopped' %}已停止{% else %}{{ scheduler.stats.status }}{% endif %}</span>
+            </div>
+            <div class="info-item">
+                <label>检测间隔</label>
+                <span>{{ scheduler.interval_seconds }}s</span>
+            </div>
+            <div class="info-item">
+                <label>并发数</label>
+                <span>{{ scheduler.concurrency }}</span>
+            </div>
+            <div class="info-item">
+                <label>最后执行</label>
+                <span>{{ scheduler.stats.last_run_at or '未执行' }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 延迟趋势图表 -->
+    <div class="section">
+        <div class="section-header">
+            <h2>延迟趋势</h2>
+            <select id="chart-hours" onchange="loadLatencyChart()">
+                <option value="6">6小时</option>
+                <option value="12">12小时</option>
+                <option value="24" selected>24小时</option>
+                <option value="48">48小时</option>
+            </select>
+        </div>
+        <div class="chart-container">
+            <canvas id="latencyChart"></canvas>
+        </div>
+    </div>
+    
+    <!-- 可用性趋势图表 -->
+    <div class="section">
+        <h2>可用性趋势</h2>
+        <div class="chart-container">
+            <canvas id="availabilityChart"></canvas>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}
+{% endblock %}
