@@ -324,6 +324,137 @@ class EmailNotificationService:
             )
 
 
+class WebhookNotificationService:
+    """
+    Webhook 通知服务
+
+    此前该分支直接返回"未实现"，但模型、Schema、前端表单都支持
+    webhook 渠道 —— 用户能在面板上创建渠道并点测试，结果永远是失败。
+    这里补齐发送实现。
+
+    请求体为 JSON，字段与邮件正文对应，便于对端直接消费。
+    若渠道配置了签名密钥，则附加 HMAC-SHA256 签名头，
+    接收方可据此校验请求确实来自本监控系统。
+    """
+
+    # 超时与重试：webhook 对端不可控，必须设置上限，
+    # 否则会拖住整条告警链路（告警是串行发送的）
+    TIMEOUT_SECONDS = 10.0
+    MAX_RETRIES = 2
+    RETRY_DELAY_SECONDS = 1.0
+
+    @classmethod
+    def _build_payload(
+        cls,
+        alert_type: str,
+        node_name: Optional[str],
+        node_url: Optional[str],
+        subject: str,
+        message: str,
+    ) -> dict:
+        """构造 webhook 请求体"""
+        return {
+            "alert_type": alert_type,
+            "node_name": node_name,
+            "node_url": node_url,
+            "subject": subject,
+            "message": message,
+            "triggered_at": datetime.now().isoformat(),
+            "source": "server-monitor",
+        }
+
+    @classmethod
+    def _sign(cls, body: bytes, secret: str) -> str:
+        """计算 HMAC-SHA256 签名"""
+        import hashlib
+        import hmac
+
+        return hmac.new(
+            secret.encode("utf-8"), body, hashlib.sha256
+        ).hexdigest()
+
+    @classmethod
+    async def send_webhook(
+        cls,
+        url: str,
+        payload: dict,
+        secret: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        发送 webhook 请求
+
+        Args:
+            url: 接收地址
+            payload: 请求体
+            secret: 可选的签名密钥
+
+        Returns:
+            (是否成功, 错误信息)
+        """
+        import json
+
+        import httpx
+
+        if not url:
+            return False, "Webhook URL 为空"
+
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError) as e:
+            return False, f"请求体序列化失败: {e}"
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": "server-monitor/1.0",
+        }
+        if secret:
+            headers["X-Signature"] = cls._sign(body, secret)
+            headers["X-Signature-Algorithm"] = "hmac-sha256"
+
+        # 本地地址不做 TLS 校验（常见于内网自签证书场景）
+        verify = not url.startswith("http://")
+
+        last_error = None
+        for attempt in range(cls.MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=cls.TIMEOUT_SECONDS, verify=verify
+                ) as client:
+                    response = await client.post(url, content=body, headers=headers)
+
+                if 200 <= response.status_code < 300:
+                    logger.info(
+                        f"Webhook 发送成功: url={url}, "
+                        f"status={response.status_code}"
+                    )
+                    return True, None
+
+                # 4xx 是配置问题，重试无意义（除非是 429 限流）
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    return False, f"Webhook 返回 {response.status_code}（配置或权限问题）"
+
+                last_error = f"Webhook 返回 {response.status_code}"
+
+            except httpx.TimeoutException:
+                last_error = f"Webhook 请求超时（{cls.TIMEOUT_SECONDS}s）"
+            except httpx.ConnectError as e:
+                last_error = f"Webhook 连接失败: {e}"
+            except httpx.HTTPError as e:
+                last_error = f"Webhook 请求错误: {e}"
+            except Exception as e:
+                last_error = f"Webhook 发送异常: {type(e).__name__}: {e}"
+
+            if attempt < cls.MAX_RETRIES:
+                logger.warning(
+                    f"Webhook 发送失败（第 {attempt + 1} 次），"
+                    f"{cls.RETRY_DELAY_SECONDS}s 后重试: {last_error}"
+                )
+                await asyncio.sleep(cls.RETRY_DELAY_SECONDS)
+
+        logger.error(f"Webhook 发送最终失败: url={url}, error={last_error}")
+        return False, last_error
+
+
 class NotificationLogService:
     """
     通知发送记录服务
@@ -1078,9 +1209,49 @@ class NotificationService:
             return success, error
         
         elif channel_type == "webhook":
-            # Webhook 通知（待实现）
-            return False, "Webhook通知暂未实现"
-        
+            webhook_url = channel.get("webhook_url")
+            webhook_secret = channel.get("webhook_secret")
+
+            if not webhook_url:
+                await cls.update_channel_status(
+                    channel_id, False, "Webhook URL 未配置"
+                )
+                return False, "Webhook URL 未配置"
+
+            payload = WebhookNotificationService._build_payload(
+                alert_type=alert_type,
+                node_name=node_name,
+                node_url=node_url,
+                subject=subject,
+                message=message,
+            )
+
+            success, error = await WebhookNotificationService.send_webhook(
+                url=webhook_url,
+                payload=payload,
+                secret=webhook_secret,
+            )
+
+            send_duration_ms = (time_module.time() - start_time) * 1000
+
+            await cls.update_channel_status(channel_id, success, error)
+
+            await NotificationLogService.add_log(
+                channel_id=channel_id,
+                channel_name=channel.get("name", ""),
+                alert_type=alert_type,
+                success=success,
+                node_name=node_name,
+                node_url=node_url,
+                subject=subject,
+                message=message,
+                recipients=webhook_url,
+                error_message=error if not success else None,
+                send_duration_ms=send_duration_ms,
+            )
+
+            return success, error
+
         else:
             return False, f"不支持的渠道类型: {channel_type}"
     
