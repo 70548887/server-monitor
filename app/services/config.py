@@ -73,6 +73,11 @@ class AlertingConfig:
     quiet_hours_enabled: bool = False
     quiet_hours_start: str = "23:00"
     quiet_hours_end: str = "07:00"
+    # ===== 升级提醒（Phase 4）=====
+    # 故障持续超过该分钟数后，提醒改为"升级"模式：
+    # 在主题中标注、绕过每日发送上限（此时"少打扰"要让位于"必须送达"）。
+    # 0 表示不启用升级。
+    escalate_after_minutes: int = 0
     webhook_enabled: bool = False
     webhook_url: str = ""
     email_enabled: bool = False
@@ -268,6 +273,7 @@ def load_config(
             quiet_hours_enabled=alert.get("quiet_hours", {}).get("enabled", False),
             quiet_hours_start=alert.get("quiet_hours", {}).get("start", "23:00"),
             quiet_hours_end=alert.get("quiet_hours", {}).get("end", "07:00"),
+            escalate_after_minutes=alert.get("escalate_after_minutes", 0),
             webhook_enabled=channels.get("webhook", {}).get("enabled", False),
             webhook_url=channels.get("webhook", {}).get("url", ""),
             email_enabled=channels.get("email", {}).get("enabled", False),

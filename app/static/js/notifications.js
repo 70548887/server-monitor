@@ -761,6 +761,9 @@ async function loadAlertCadence() {
         if (intervalsEl) intervalsEl.value = intervals.join(',');
         if (loopEl) loopEl.value = config.intervals_loop_minutes || 720;
 
+        const escalateEl = document.getElementById('alert-escalate-minutes');
+        if (escalateEl) escalateEl.value = config.escalate_after_minutes || 0;
+
         const q = config.quiet_hours || {};
         if (quietEnabled) quietEnabled.checked = !!q.enabled;
         if (quietStart && q.start) quietStart.value = q.start;
@@ -810,6 +813,7 @@ async function saveAlertCadence() {
     const data = {
         reminder_intervals_minutes: intervals,
         intervals_loop_minutes: parseInt(loopEl?.value) || 720,
+        escalate_after_minutes: parseInt(document.getElementById('alert-escalate-minutes')?.value) || 0,
         quiet_hours_enabled: quietOn,
         quiet_hours_start: quietStart?.value || '23:00',
         quiet_hours_end: quietEnd?.value || '07:00',

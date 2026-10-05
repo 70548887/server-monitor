@@ -668,6 +668,7 @@ class AlertConfigUpdate(BaseModel):
     quiet_hours_enabled: Optional[bool] = None              # 夜间静默
     quiet_hours_start: Optional[str] = None                 # 静默开始 HH:MM
     quiet_hours_end: Optional[str] = None                   # 静默结束 HH:MM
+    escalate_after_minutes: Optional[int] = None            # 升级阈值(分钟)，0=不启用
 
 
 @router.put("/alerts/config")
@@ -788,6 +789,16 @@ async def update_alert_config(data: AlertConfigUpdate):
             status_code=400,
             detail={"code": "E006", "message": "静默时段的开始与结束时间不能相同"}
         )
+
+    # ---------- 升级提醒 ----------
+    if data.escalate_after_minutes is not None:
+        if data.escalate_after_minutes < 0 or data.escalate_after_minutes > 10080:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "E006", "message": "升级阈值必须在 0-10080 分钟之间（0 表示不启用）"}
+            )
+        config.alerting.escalate_after_minutes = data.escalate_after_minutes
+        updated_fields["escalate_after_minutes"] = data.escalate_after_minutes
     
     # 同步更新 AlertingService 的配置
     from ..services.alerting import get_alerting_service

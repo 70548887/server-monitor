@@ -524,6 +524,45 @@ class AlertingService:
             return end_dt
         return end_dt + timedelta(days=1)
 
+    def _elapsed_for_seq(self, seq: int) -> int:
+        """
+        根据提醒序号反推"距事件开始的大致分钟数"
+
+        取阶梯中第 seq 档对应的时间点。这样升级阈值可以按实际阶梯
+        判断，而不是假设"每次提醒间隔相等"（阶梯是递减的：
+        立即/1h/5h/13h/25h）。
+        """
+        intervals = self._config.reminder_intervals or (0,)
+        if seq <= 0:
+            return 0
+        if seq <= len(intervals):
+            return intervals[seq - 1]
+        # 超出阶梯长度：最后一个刻度 + 循环间隔
+        overflow = seq - len(intervals)
+        return intervals[-1] + self._config.intervals_loop_minutes * overflow
+
+    def is_escalated(self, event: AlertEvent) -> bool:
+        """
+        判断该告警是否已进入升级状态
+
+        升级的含义：故障持续时间超过阈值，后续提醒应当更醒目，
+        且不再受每日发送上限约束——此时"避免打扰"要让位于"确保送达"。
+        """
+        threshold = self._config.escalate_after_minutes
+        if not threshold or threshold <= 0:
+            return False
+
+        # 恢复通知本身不升级（它是好消息，且用于关闭事件）
+        if event.alert_type == "node_recovery":
+            return False
+
+        # 优先用事件的实际持续时长（恢复通知带此信息）
+        if event.incident_duration_s is not None:
+            return (event.incident_duration_s / 60) >= threshold
+
+        # 否则按提醒序号反推
+        return self._elapsed_for_seq(event.notify_seq or 0) >= threshold
+
     def _build_down_event(
         self,
         result: HeartbeatResult,
@@ -1008,14 +1047,18 @@ async def process_alerts(events: list[AlertEvent]):
                     }
                     type_name = type_names.get(event.alert_type, "告警")
 
+                    # 升级判定：故障持续超过阈值后，提醒更醒目且跳过每日上限
+                    escalated = get_alerting_service().is_escalated(event)
+
                     # 第 N 次提醒：主题里标明序号，避免被当成新故障
                     seq = event.notify_seq or 0
+                    prefix = "[升级]" if escalated else ""
                     if event.alert_type == "node_down" and seq > 1:
-                        subject = f"[服务器监控] {type_name}(第{seq}次提醒): {event.node_name}"
+                        subject = f"[服务器监控]{prefix} {type_name}(第{seq}次提醒): {event.node_name}"
                     elif event.alert_type == "node_recovery":
                         subject = f"[服务器监控] {type_name}: {event.node_name} 已恢复"
                     else:
-                        subject = f"[服务器监控] {type_name}: {event.node_name}"
+                        subject = f"[服务器监控]{prefix} {type_name}: {event.node_name}"
 
                     body = f"""
 告警类型: {type_name}{f'（第 {seq} 次提醒）' if seq > 1 else ''}
@@ -1023,6 +1066,11 @@ async def process_alerts(events: list[AlertEvent]):
 节点URL: {event.node_url}
 触发时间: {event.triggered_at.strftime('%Y-%m-%d %H:%M:%S')}
 """
+                    if escalated:
+                        body += (
+                            "⚠️ 该故障已持续较长时间仍未恢复，"
+                            "本条为升级提醒（不受每日发送上限限制）\n"
+                        )
                     # 恢复通知：附上故障期间的汇总
                     if event.alert_type == "node_recovery":
                         if event.incident_duration_s is not None:
@@ -1058,6 +1106,7 @@ async def process_alerts(events: list[AlertEvent]):
                         alert_type=event.alert_type,
                         node_name=event.node_name,
                         node_url=event.node_url,
+                        escalated=escalated,
                     )
                     
                     if success:

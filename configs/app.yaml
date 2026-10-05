@@ -54,6 +54,13 @@ alerting:
   # 单个事件的通知次数上限，0 = 不限（由阶梯自然收敛）
   max_notifications_per_incident: 0
 
+  # ===== 升级提醒 =====
+  # 故障持续超过该分钟数后，提醒主题加 [升级] 前缀，并跳过
+  # "单节点每日发送上限" —— 长时间未恢复时，送达优先于抑制重复。
+  # 最小发送间隔与可发送时段仍然生效，不会变成刷屏。
+  # 0 = 不启用。建议配合上面的阶梯，例如设 720 表示 12 小时后升级。
+  escalate_after_minutes: 0
+
   # suppress_minutes 现在只管 node_recovery 与 latency_high 这类
   # 容易抖动的告警；node_down 的节奏完全由上面的阶梯控制。
   suppress_minutes: 240

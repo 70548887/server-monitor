@@ -260,6 +260,19 @@
                         </div>
                     </div>
                     <div class="alert-config-item">
+                        <div class="config-icon">🚨</div>
+                        <div class="config-content">
+                            <label>升级提醒</label>
+                            <p>故障持续超过该时长后，邮件标题加 [升级] 标记，
+                               并跳过每日发送上限（送达优先于抑制重复）</p>
+                            <div class="config-input-row">
+                                <span>持续超过</span>
+                                <input type="number" id="alert-escalate-minutes" min="0" max="10080" value="0">
+                                <span>分钟后升级（0 = 不启用）</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="alert-config-item">
                         <div class="config-icon">🌙</div>
                         <div class="config-content">
                             <label>夜间静默时段</label>

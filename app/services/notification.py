@@ -1032,10 +1032,18 @@ class NotificationService:
         cls,
         channel: dict,
         node_name: Optional[str] = None,
+        skip_daily_limit: bool = False,
     ) -> tuple[bool, str]:
         """
         检查发送限制
-        
+
+        Args:
+            channel: 渠道配置
+            node_name: 节点名称
+            skip_daily_limit: 跳过每日总量上限。仅用于升级提醒 ——
+                故障长时间未恢复时，送达优先于抑制重复。
+                最小间隔与可发送时段仍然生效，避免瞬时刷屏。
+
         Returns:
             (是否允许发送, 限制原因)
         """
@@ -1084,13 +1092,14 @@ class NotificationService:
                     return False, f"发送间隔太短，需等待 {int(min_interval - elapsed)} 秒"
         
         # 3. 检查单节点每日发送上限
-        if node_name:
+        # 升级提醒跳过此项：故障长时间未恢复时，送达优先于抑制
+        if node_name and not skip_daily_limit:
             daily_limit = channel.get("daily_limit_per_node", 10)
             if daily_limit and daily_limit > 0:
                 today_count = await NotificationLogService.get_today_count_for_node(channel_id, node_name)
                 if today_count >= daily_limit:
                     return False, f"节点 {node_name} 今日发送已达上限（{daily_limit}次）"
-        
+
         return True, ""
     
     @classmethod
@@ -1103,10 +1112,11 @@ class NotificationService:
         node_name: Optional[str] = None,
         node_url: Optional[str] = None,
         check_limits: bool = True,
+        escalated: bool = False,
     ) -> tuple[bool, str]:
         """
         通过指定渠道发送通知
-        
+
         Args:
             channel_id: 渠道ID
             subject: 通知主题
@@ -1115,22 +1125,28 @@ class NotificationService:
             node_name: 节点名称
             node_url: 节点URL
             check_limits: 是否检查发送限制
-        
+            escalated: 是否升级提醒。升级时跳过"每日发送上限"——
+                       故障长时间未恢复，送达的重要性高于避免打扰。
+
         Returns:
             (是否成功, 错误消息)
         """
         start_time = time_module.time()
-        
+
         channel = await cls.get_channel_by_id(channel_id)
         if not channel:
             return False, "通知渠道不存在"
-        
+
         if not channel.get("enabled"):
             return False, "通知渠道已禁用"
-        
+
         # 检查发送限制（测试邮件不检查）
         if check_limits and alert_type != "test":
-            can_send, limit_reason = await cls.check_send_limits(channel, node_name)
+            # 升级提醒仍需受"最小间隔"与"可发送时段"约束（避免瞬时刷屏），
+            # 但放开每日总量上限 —— 那是为抑制重复提醒设计的。
+            can_send, limit_reason = await cls.check_send_limits(
+                channel, node_name, skip_daily_limit=escalated
+            )
             if not can_send:
                 # 记录被限制的发送
                 await NotificationLogService.add_log(
