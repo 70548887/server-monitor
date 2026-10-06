@@ -341,8 +341,26 @@ class WebhookNotificationService:
     # 超时与重试：webhook 对端不可控，必须设置上限，
     # 否则会拖住整条告警链路（告警是串行发送的）
     TIMEOUT_SECONDS = 10.0
-    MAX_RETRIES = 2
-    RETRY_DELAY_SECONDS = 1.0
+    MAX_RETRIES = 3
+    # 指数退避：base * 2^attempt，上限 MAX_RETRY_DELAY_SECONDS。
+    # 对端长时间不可用时固定间隔重试会加剧其负担，
+    # 退避让压力随时间释放，也给对端留出恢复窗口。
+    RETRY_BASE_DELAY_SECONDS = 1.0
+    MAX_RETRY_DELAY_SECONDS = 30.0
+
+    @classmethod
+    def _retry_delay(cls, attempt: int) -> float:
+        """
+        计算第 attempt 次重试前的等待秒数
+
+        Args:
+            attempt: 已经失败并准备重试的次数（从 0 开始）
+
+        Returns:
+            等待秒数，封顶 MAX_RETRY_DELAY_SECONDS
+        """
+        delay = cls.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+        return min(delay, cls.MAX_RETRY_DELAY_SECONDS)
 
     @classmethod
     def _build_payload(
@@ -446,11 +464,12 @@ class WebhookNotificationService:
                 last_error = f"Webhook 发送异常: {type(e).__name__}: {e}"
 
             if attempt < cls.MAX_RETRIES:
+                delay = cls._retry_delay(attempt)
                 logger.warning(
                     f"Webhook 发送失败（第 {attempt + 1} 次），"
-                    f"{cls.RETRY_DELAY_SECONDS}s 后重试: {last_error}"
+                    f"{delay:.1f}s 后重试: {last_error}"
                 )
-                await asyncio.sleep(cls.RETRY_DELAY_SECONDS)
+                await asyncio.sleep(delay)
 
         logger.error(f"Webhook 发送最终失败: url={url}, error={last_error}")
         return False, last_error

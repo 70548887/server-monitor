@@ -173,7 +173,7 @@ class TestWebhookSending:
 
         patch_httpx(handler)
         monkeypatch.setattr(
-            WebhookNotificationService, "RETRY_DELAY_SECONDS", 0.001
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 0.001
         )
 
         success, error = await WebhookNotificationService.send_webhook(
@@ -196,7 +196,7 @@ class TestWebhookSending:
 
         patch_httpx(handler)
         monkeypatch.setattr(
-            WebhookNotificationService, "RETRY_DELAY_SECONDS", 0.001
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 0.001
         )
 
         success, _ = await WebhookNotificationService.send_webhook(
@@ -215,7 +215,7 @@ class TestWebhookSending:
 
         patch_httpx(handler)
         monkeypatch.setattr(
-            WebhookNotificationService, "RETRY_DELAY_SECONDS", 0.001
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 0.001
         )
 
         success, error = await WebhookNotificationService.send_webhook(
@@ -235,7 +235,7 @@ class TestWebhookSending:
 
         patch_httpx(handler)
         monkeypatch.setattr(
-            WebhookNotificationService, "RETRY_DELAY_SECONDS", 0.001
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 0.001
         )
 
         success, error = await WebhookNotificationService.send_webhook(
@@ -251,7 +251,7 @@ class TestWebhookSending:
 
         patch_httpx(handler)
         monkeypatch.setattr(
-            WebhookNotificationService, "RETRY_DELAY_SECONDS", 0.001
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 0.001
         )
 
         success, error = await WebhookNotificationService.send_webhook(
@@ -271,6 +271,90 @@ class TestWebhookSending:
                 "https://hook.example.com/x", {"a": 1}
             )
             assert success is True, f"{code} 应视为成功"
+
+
+class TestWebhookExponentialBackoff:
+    """
+    指数退避重试
+
+    对端长时间不可用时，固定间隔重试会持续加压且不给恢复窗口。
+    退避让压力随时间释放。
+    """
+
+    def test_delay_doubles(self):
+        svc = WebhookNotificationService
+        assert svc._retry_delay(0) == 1.0
+        assert svc._retry_delay(1) == 2.0
+        assert svc._retry_delay(2) == 4.0
+        assert svc._retry_delay(3) == 8.0
+
+    def test_delay_capped(self):
+        """退避封顶，不会无限增长拖垮告警链路"""
+        svc = WebhookNotificationService
+        assert svc._retry_delay(10) == svc.MAX_RETRY_DELAY_SECONDS
+        assert svc._retry_delay(100) == svc.MAX_RETRY_DELAY_SECONDS
+
+    def test_delay_monotonic_increasing(self):
+        """在封顶前严格递增"""
+        svc = WebhookNotificationService
+        delays = [svc._retry_delay(i) for i in range(svc.MAX_RETRIES)]
+        assert delays == sorted(delays)
+        assert len(set(delays)) == len(delays), "封顶前不应出现重复延迟"
+
+    async def test_uses_backoff_not_fixed_delay(self, patch_httpx, monkeypatch):
+        """重试实际等待时间应逐次翻倍"""
+        slept = []
+
+        async def fake_sleep(seconds):
+            slept.append(seconds)
+
+        import app.services.notification as notif_mod
+        monkeypatch.setattr(notif_mod.asyncio, "sleep", fake_sleep)
+        monkeypatch.setattr(
+            WebhookNotificationService, "RETRY_BASE_DELAY_SECONDS", 1.0
+        )
+        monkeypatch.setattr(
+            WebhookNotificationService, "MAX_RETRY_DELAY_SECONDS", 30.0
+        )
+
+        def handler(request):
+            return httpx.Response(500, text="boom")
+
+        patch_httpx(handler)
+
+        await WebhookNotificationService.send_webhook(
+            "https://hook.example.com/x", {"a": 1}
+        )
+
+        # MAX_RETRIES=3 → 3 次重试 → 延迟 1s / 2s / 4s
+        assert slept == [1.0, 2.0, 4.0], f"退避序列不符合预期: {slept}"
+
+    async def test_total_attempts_bounded(self, patch_httpx, monkeypatch):
+        """总尝试次数有上限，不会无限重试"""
+
+        async def fake_sleep(seconds):
+            pass
+
+        import app.services.notification as notif_mod
+        monkeypatch.setattr(notif_mod.asyncio, "sleep", fake_sleep)
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(503)
+
+        patch_httpx(handler)
+
+        await WebhookNotificationService.send_webhook(
+            "https://hook.example.com/x", {"a": 1}
+        )
+
+        assert len(calls) == WebhookNotificationService.MAX_RETRIES + 1
+        assert len(calls) <= 5, "重试次数必须有界"
+
+    def test_no_stub_constants_left(self):
+        """旧的固定间隔常量已不存在，避免误用"""
+        assert not hasattr(WebhookNotificationService, "RETRY_DELAY_SECONDS")
 
 
 class TestWebhookDispatch:
