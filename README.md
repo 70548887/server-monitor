@@ -133,13 +133,16 @@ alerting:
 ## 测试
 
 ```bash
-python -m pytest              # 251 passed, 30 skipped
+python -m pytest              # 287 passed, 30 skipped
 python -m pytest -v           # 详细输出
 ```
 
 - 单元测试不依赖 MySQL / Redis，可直接运行
 - 时间相关逻辑用可推进的假时钟（`FrozenClock`）驱动，
-  因此"跨午夜不爆发""静默不连发"这类场景才能被确定性验证
+  因此"跨午夜不爆发""静默不连发"这类场景才能被确定性验证。
+  假时钟区分 UTC 与本地两种语义，避免测试通过而生产出错
+- 时区相关逻辑有专门测试（`tests/test_timezone.py`），
+  本机非 UTC 时区时验证静默窗口对齐本地时刻
 - 路由 API 测试需要 `email-validator`；缺失时优雅跳过并提示安装命令、
   而不是让整个文件收集失败
 
@@ -153,12 +156,20 @@ python -m pytest -v           # 详细输出
 | `app/services/scheduler.py` | 定时任务注册 |
 | `app/services/availability.py` | 内存可用性统计（48 小时窗口） |
 | `app/repositories/mysql_repository.py` | 持久化与聚合读写 |
+| `app/utils/timeutil.py` | 时间工具（UTC 取值、时区换算） |
 | `scripts/migrate_phase2_incidents.py` | 事件表迁移（幂等） |
+
+## 时间约定
+
+- **存储层**：数据库列为朴素 `DateTime`（未启用 `timezone=True`），统一写入 **UTC 朴素时间**
+- **展示层**：静默时段等配置由用户按**本地时刻**填写，判定前必须先换算
+
+`app/utils/timeutil.py` 提供两者之间的转换。不要直接用
+`datetime.now(timezone.utc)` 写库——带时区的对象与已有朴素数据
+混用会产生 8 小时偏差。
 
 ## 已知限制
 
-- **Webhook 有重试但无指数退避**，对端持续不可用时固定间隔重试 2 次
 - **p50/p95/p99 延迟未落库**，聚合表只存窗口内的可用性比例。
   给出未经样本级计算的分位数会显得精确却无依据，故未实现
 - **单实例假设**：内存可用性统计与内存 Session 降级不支持多进程部署
-- **`datetime.utcnow()` 已弃用**，运行时会产生警告（尚未迁移到时区感知对象）
