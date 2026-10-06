@@ -28,7 +28,8 @@ SESSION_COOKIE_MAX_AGE = 24 * 60 * 60  # 24小时
 async def login_page(request: Request, error: Optional[str] = None):
     """登录页面"""
     return templates.TemplateResponse(
-        "login.html",
+        request,
+             "login.html",
         {
             "request": request, 
             "error": error
@@ -83,7 +84,8 @@ async def login(
     # 验证滑动验证码
     if not captcha_id or captcha_x is None:
         return templates.TemplateResponse(
-            "login.html",
+            request,
+                 "login.html",
             {"request": request, "error": "请先完成人机验证"},
             status_code=400
         )
@@ -91,7 +93,8 @@ async def login(
     is_valid = await verify_captcha(captcha_id, captcha_x)
     if not is_valid:
         return templates.TemplateResponse(
-            "login.html",
+            request,
+                 "login.html",
             {"request": request, "error": "验证码校验失败，请重试"},
             status_code=400
         )
@@ -104,7 +107,8 @@ async def login(
     is_locked, remaining = await rate_store.is_ip_locked(client_ip)
     if is_locked:
         return templates.TemplateResponse(
-            "login.html",
+            request,
+                 "login.html",
             {
                 "request": request, 
                 "error": f"登录尝试次数过多，请 {remaining // 60 + 1} 分钟后重试"
@@ -126,7 +130,8 @@ async def login(
         
         # 登录失败，返回登录页面并显示错误
         return templates.TemplateResponse(
-            "login.html",
+            request,
+                 "login.html",
             {"request": request, "error": error_msg},
             status_code=401
         )
@@ -229,7 +234,8 @@ async def settings_page(
     admin = await auth_service.get_admin_by_id(admin_id)
     
     return templates.TemplateResponse(
-        "settings.html",
+        request,
+             "settings.html",
         {
             "request": request,
             "username": session_data.get("username"),

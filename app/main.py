@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
 
 # 确保项目根目录在 Python 路径中
 project_root = Path(__file__).parent.parent
@@ -397,8 +397,24 @@ app = FastAPI(
 
 # ========== 全局异常处理 ==========
 @app.exception_handler(404)
-async def custom_404_handler(request: Request, __):
-    """404 错误跳转到登录页"""
+async def custom_404_handler(request: Request, exc):
+    """
+    404 处理：页面跳登录页，API 返回 JSON
+
+    页面路径（如 /ui/nodes/xxx）跳登录页便于用户重新认证。
+    但 API 路径必须返回 JSON 404 —— 否则调用方拿到的是 307 跳转
+    到一个 HTML 登录页，既掩盖了"资源不存在"，也无法被程序处理。
+
+    路由自身抛出的 HTTPException(404) 带有业务错误码（如 E003 节点不存在），
+    这里必须原样透传，否则统一的处理器会把具体错误码抹成 E404。
+    """
+    detail = getattr(exc, "detail", None)
+
+    path = request.url.path
+    if path.startswith("/api/") or path == "/metrics":
+        if detail is None:
+            detail = {"code": "E404", "message": f"资源不存在: {path}"}
+        return JSONResponse(status_code=404, content={"detail": detail})
     return RedirectResponse(url="/login")
 
 # ========== 中间件 ==========

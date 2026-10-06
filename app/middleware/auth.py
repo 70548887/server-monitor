@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE_NAME = "session_id"
 
 # 不需要登录的公开路由
+# 注意：所有 /healthz/* 探针都必须公开，否则监控无法在未认证状态下
+# 判断服务存活。调度器状态同属健康信息，与 /healthz 保持一致。
 PUBLIC_PATHS = {
     "/login",
     "/api/auth/captcha",
@@ -20,6 +22,7 @@ PUBLIC_PATHS = {
     "/healthz",
     "/healthz/live",
     "/healthz/ready",
+    "/healthz/scheduler",
 }
 
 # 公开路由前缀

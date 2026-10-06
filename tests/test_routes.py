@@ -29,6 +29,37 @@ requires_app = pytest.mark.skipif(
 )
 
 
+def collect_paths(routes, out):
+    """
+    递归收集路由路径，兼容 Starlette 的嵌套路由容器
+
+    include_router 的实现随版本变化：旧版把路由展平追加到 app.routes，
+    新版放入 _IncludedRouter（原始 router 在 original_router 上）。
+    两种形态都要支持，否则路由注册断言会在升级后集体失效。
+    """
+    for r in routes:
+        path = getattr(r, "path", None)
+        if isinstance(path, str):
+            out.add(path)
+            continue
+
+        # Starlette >= 1.x 的嵌套容器
+        original = getattr(r, "original_router", None)
+        if original is not None and hasattr(original, "routes"):
+            collect_paths(original.routes, out)
+            continue
+
+        # 其他可能的嵌套形态
+        inner = getattr(r, "router", None)
+        if inner is not None and hasattr(inner, "routes"):
+            collect_paths(inner.routes, out)
+            continue
+
+        sub = getattr(r, "routes", None)
+        if sub:
+            collect_paths(sub, out)
+
+
 def make_client():
     """构造直连 ASGI 应用的测试客户端"""
     transport = httpx.ASGITransport(app=app)
@@ -82,12 +113,18 @@ class TestHealthRoutes:
         assert "status" in body
 
     async def test_readiness_probe_ready(self):
+        """
+        就绪探针返回 200（就绪）或 503（未就绪）
+
+        响应体含 ready / checks，不是 status —— /healthz 才有 status 字段。
+        """
         async with make_client() as client:
             res = await client.get("/healthz/ready")
 
-        # 未连接存储时返回 503，属于预期
         assert res.status_code in (200, 503)
-        assert "status" in res.json()
+        body = res.json()
+        assert "ready" in body
+        assert "checks" in body
 
     async def test_scheduler_health(self):
         """调度器健康端点可访问（无需认证）"""
@@ -196,6 +233,15 @@ class TestNodeRoutes:
     """节点 API（已登录）"""
 
     async def test_list_nodes(self, monkeypatch):
+        """节点列表返回数组（mock 数据库，避免连接超时）"""
+        import app.routes.nodes as nodes_mod
+
+        class FakeRepo:
+            async def get_all_nodes(self, include_deleted=False):
+                return []
+
+        monkeypatch.setattr(nodes_mod, "_get_db_repository", lambda: FakeRepo())
+
         async with make_authed_client(monkeypatch) as client:
             res = await client.get("/api/nodes")
 
@@ -204,12 +250,28 @@ class TestNodeRoutes:
 
     async def test_get_node(self, monkeypatch):
         """查询不存在的节点返回 404 而不是 500"""
+        import app.routes.nodes as nodes_mod
+
+        class FakeRepo:
+            async def get_node_by_name(self, name):
+                return None
+
+        monkeypatch.setattr(nodes_mod, "_get_db_repository", lambda: FakeRepo())
+
         async with make_authed_client(monkeypatch) as client:
             res = await client.get("/api/nodes/definitely-not-a-real-node")
 
         assert res.status_code == 404
 
     async def test_get_node_not_found(self, monkeypatch):
+        import app.routes.nodes as nodes_mod
+
+        class FakeRepo:
+            async def get_node_by_name(self, name):
+                return None
+
+        monkeypatch.setattr(nodes_mod, "_get_db_repository", lambda: FakeRepo())
+
         async with make_authed_client(monkeypatch) as client:
             res = await client.get("/api/nodes/no-such-node-xyz")
 
@@ -225,11 +287,28 @@ class TestAlertRoutes:
     """告警 API（已登录）"""
 
     async def test_list_alerts(self, monkeypatch):
+        """
+        告警列表返回分页结构
+
+        mock 掉数据库：本文件测的是路由与中间件行为，不是持久化。
+        若真连 MySQL，无库环境下会因连接超时把整个套件拖慢数分钟。
+        """
+        import app.services.alerting as alerting_mod
+
+        async def fake_get_logs(*args, **kwargs):
+            return ([], 0)
+
+        monkeypatch.setattr(
+            alerting_mod.AlertLogService, "get_logs", fake_get_logs
+        )
+
         async with make_authed_client(monkeypatch) as client:
             res = await client.get("/api/notifications/alerts/logs")
 
-        # 无数据库时可能 500，但路由必须存在且不接受匿名访问
-        assert res.status_code != 401
+        assert res.status_code == 200
+        body = res.json()
+        assert body["alerts"] == []
+        assert body["total"] == 0
 
 
 @requires_app
@@ -237,10 +316,21 @@ class TestNotificationRoutes:
     """通知 API（已登录）"""
 
     async def test_list_channels(self, monkeypatch):
+        """渠道列表返回数组（mock 数据库，避免连接超时）"""
+        import app.services.notification as notif_mod
+
+        async def fake_get_all(cls=None):
+            return []
+
+        monkeypatch.setattr(
+            notif_mod.NotificationService, "get_all_channels", fake_get_all
+        )
+
         async with make_authed_client(monkeypatch) as client:
             res = await client.get("/api/notifications/channels")
 
-        assert res.status_code != 401
+        assert res.status_code == 200
+        assert isinstance(res.json(), list)
 
 
 @requires_app
@@ -275,7 +365,17 @@ class TestRouteRegistration:
     """路由注册完整性"""
 
     def _paths(self):
-        return {r.path for r in app.routes}
+        """
+        收集全部已注册路径
+
+        Starlette >= 1.x 的 include_router 不再把路由展平到 app.routes，
+        而是放入 _IncludedRouter 容器（通过 original_router 访问原始
+        router）。因此不能直接 {r.path for r in app.routes} —— 那会漏掉
+        全部业务路由并抛 AttributeError。
+        """
+        out = set()
+        collect_paths(app.routes, out)
+        return out
 
     def test_health_routes_registered(self):
         paths = self._paths()
@@ -317,10 +417,37 @@ class TestRouteRegistration:
         否则 Starlette 会把 "stats" 当成 incident_id 匹配，
         导致统计接口返回 422。
         """
-        paths = [r.path for r in app.routes]
+        out = set()
+        collect_paths(app.routes, out)
+        paths = self._ordered_paths()
         stats_idx = paths.index("/api/notifications/incidents/stats")
         dynamic_idx = paths.index("/api/notifications/incidents/{incident_id}")
         assert stats_idx < dynamic_idx, "动态路由抢先匹配，统计接口会失效"
+
+    def _ordered_paths(self):
+        """按注册顺序展开路由路径（需递归，Starlette 1.x 为嵌套结构）"""
+        ordered = []
+
+        def walk(routes):
+            for r in routes:
+                path = getattr(r, "path", None)
+                if isinstance(path, str):
+                    ordered.append(path)
+                    continue
+                original = getattr(r, "original_router", None)
+                if original is not None and hasattr(original, "routes"):
+                    walk(original.routes)
+                    continue
+                inner = getattr(r, "router", None)
+                if inner is not None and hasattr(inner, "routes"):
+                    walk(inner.routes)
+                    continue
+                sub = getattr(r, "routes", None)
+                if sub:
+                    walk(sub)
+
+        walk(app.routes)
+        return ordered
 
     def test_robots_and_anti_crawling(self):
         paths = self._paths()

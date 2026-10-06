@@ -25,7 +25,9 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 import redis.asyncio as aioredis
+from redis.backoff import NoBackoff
 from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
+from redis.retry import Retry
 
 from ..services.config import get_config
 
@@ -78,8 +80,16 @@ class RedisRepository:
                     db=config.database.redis_db,
                     password=config.database.redis_password or None,
                     decode_responses=True,
-                    socket_connect_timeout=5,  # 连接超时 5 秒
-                    socket_timeout=3,  # 操作超时 3 秒
+                    # 超时与重试策略（重要）：
+                    # Redis 在本项目中是可选组件，不可用时降级到内存实现。
+                    # redis-py 默认带重试与指数退避，实测 Redis 宕机时单次
+                    # incr 会阻塞约 25 秒 —— 意味着每个请求都卡住、
+                    # 限流降级前先被拖死、k8s 探针超时导致 Pod 反复重启。
+                    # 故关闭重试并压低超时，让降级在亚秒级完成。
+                    socket_connect_timeout=1,
+                    socket_timeout=1,
+                    retry=Retry(NoBackoff(), 0),
+                    retry_on_timeout=False,
                 )
                 self._prefix = config.database.redis_prefix
                 logger.debug(

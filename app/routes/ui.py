@@ -77,7 +77,8 @@ async def dashboard(request: Request):
     total_nodes = len(all_nodes)
     enabled_nodes = sum(1 for n in all_nodes if n.enabled)
     
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse(request,
+        "dashboard.html", {
         "request": request,
         "title": "监控面板 - 总览",
         "health": health,
@@ -114,7 +115,8 @@ async def nodes_list(
     all_regions = sorted(set(n.region for n in all_nodes))
     all_tags = sorted(set(t for n in all_nodes for t in n.tags))
     
-    return templates.TemplateResponse("nodes.html", {
+    return templates.TemplateResponse(request,
+        "nodes.html", {
         "request": request,
         "title": "监控面板 - 节点列表",
         "nodes": nodes,
@@ -138,13 +140,15 @@ async def node_detail(request: Request, name: str):
     node = next((n for n in all_nodes if n.name == name), None)
     
     if not node:
-        return templates.TemplateResponse("error.html", {
+        return templates.TemplateResponse(request,
+            "error.html", {
             "request": request,
             "title": "节点未找到",
             "error": f"节点 {name} 不存在",
         }, status_code=404)
     
-    return templates.TemplateResponse("node_detail.html", {
+    return templates.TemplateResponse(request,
+        "node_detail.html", {
         "request": request,
         "title": f"监控面板 - {name}",
         "node": node,
@@ -156,7 +160,8 @@ async def alerts_list(request: Request):
     """
     告警列表页面
     """
-    return templates.TemplateResponse("alerts.html", {
+    return templates.TemplateResponse(request,
+        "alerts.html", {
         "request": request,
         "title": "监控面板 - 告警",
         "alerts": [],  # TODO: 从存储获取告警列表
@@ -168,7 +173,8 @@ async def notifications_page(request: Request):
     """
     通知渠道管理页面
     """
-    return templates.TemplateResponse("notifications.html", {
+    return templates.TemplateResponse(request,
+        "notifications.html", {
         "request": request,
         "title": "监控面板 - 通知渠道",
     })
@@ -185,7 +191,8 @@ async def trends_page(request: Request):
     all_nodes = await _get_nodes_from_db()
     enabled_nodes = [n for n in all_nodes if n.enabled]
     
-    return templates.TemplateResponse("trends.html", {
+    return templates.TemplateResponse(request,
+        "trends.html", {
         "request": request,
         "title": "监控面板 - 趋势分析",
         "nodes": enabled_nodes,
