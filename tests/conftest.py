@@ -36,16 +36,28 @@ class FrozenClock:
     可推进的假时钟
 
     用法:
-        clock.set(2026, 10, 4, 20, 0)
+        clock.set(2026, 10, 4, 20, 0)          # 本地 20:00
+        clock.set(2026, 10, 4, 20, 0, utc=True) # UTC 20:00
         clock.advance(minutes=30)
-        clock.now()  # 2026-10-04 20:30
+        clock.now()
+
+    时区语义很重要：生产里心跳时间戳来自 datetime.utcnow()（UTC 朴素时间），
+    而静默时段配置是用户按本地时刻填写的。测试必须能分别构造这两种，
+    否则无法验证时区转换是否正确。
     """
 
     def __init__(self):
         self.current = datetime(2026, 10, 4, 20, 0, 0)
+        # UTC 模式的偏移量：让 utcnow() 相对于本地时刻体现真实时差
+        self.offset_hours = _local_utc_offset_hours()
 
-    def set(self, year, month, day, hour=0, minute=0, second=0):
-        self.current = datetime(year, month, day, hour, minute, second)
+    def set(self, year, month, day, hour=0, minute=0, second=0, utc=False):
+        if utc:
+            # 给出一个 UTC 朴素时间戳，使其本地时刻等于所填的
+            naive_local = datetime(year, month, day, hour, minute, second)
+            self.current = naive_local - timedelta(hours=self.offset_hours)
+        else:
+            self.current = datetime(year, month, day, hour, minute, second)
         return self.current
 
     def advance(self, seconds=0, minutes=0, hours=0, days=0):
@@ -56,6 +68,34 @@ class FrozenClock:
 
     def now(self):
         return self.current
+
+    def set_local(self, year, month, day, hour=0, minute=0, second=0):
+        """
+        按**本地时刻**设置假时钟
+
+        与 set() 的区别：set() 直接写入给定值（视为 UTC 朴素时间，
+        与生产的 utcnow() 语义一致）；set_local() 会按本地时区折算，
+        用于测试静默时段这类"用户按本地填写"的配置。
+        """
+        offset = datetime.now().astimezone().utcoffset()
+        offset_hours = (offset.total_seconds() / 3600) if offset else 0.0
+        local_naive = datetime(year, month, day, hour, minute, second)
+        # 本地时间 = UTC + 偏移，因此 UTC = 本地 - 偏移
+        self.current = local_naive - timedelta(hours=offset_hours)
+        return self.current
+
+    def as_local(self, value: datetime) -> datetime:
+        """把 UTC 朴素时间显示为本地时间，便于断言与调试"""
+        offset = datetime.now().astimezone().utcoffset()
+        if offset is None:
+            return value
+        return value + offset
+
+
+def _local_utc_offset_hours() -> float:
+    """本地时区与 UTC 的小时差（向东为正）"""
+    offset = datetime.now().astimezone().utcoffset()
+    return (offset.total_seconds() / 3600) if offset else 0.0
 
 
 @pytest.fixture

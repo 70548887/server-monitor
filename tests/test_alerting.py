@@ -516,41 +516,66 @@ class TestQuietHours:
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="23:00", quiet_hours_end="07:00")
         h, m = map(int, hhmm.split(":"))
-        clock.set(2026, 10, 4, h, m)
+        clock.set_local(2026, 10, 4, h, m)
         assert svc._in_quiet_hours() is expected
 
     def test_disabled_never_quiet(self, frozen_datetime, clock):
         """未启用时任何时刻都不静默"""
         svc = make_service(frozen_datetime, quiet_hours_enabled=False)
-        clock.set(2026, 10, 4, 2, 0)
+        clock.set_local(2026, 10, 4, 2, 0)
         assert svc._in_quiet_hours() is False
 
     def test_invalid_config_does_not_silence(self, frozen_datetime, clock):
         """配置非法时不静默 —— 宁可打扰也不要漏掉整晚告警"""
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="banana", quiet_hours_end="alsobad")
-        clock.set(2026, 10, 4, 2, 0)
+        clock.set_local(2026, 10, 4, 2, 0)
         assert svc._in_quiet_hours() is False
 
     def test_end_datetime_outside_quiet_is_none(self, frozen_datetime, clock):
         """非静默时段没有"结束时刻"，否则会把白天的提醒推到明天"""
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="23:00", quiet_hours_end="07:00")
-        clock.set(2026, 10, 4, 12, 0)
+        clock.set_local(2026, 10, 4, 12, 0)
         assert svc._quiet_hours_end_datetime() is None
 
     def test_end_datetime_across_midnight(self, frozen_datetime, clock):
-        """深夜顺延到次日，凌晨则顺延到当天"""
+        """
+        深夜顺延到次日，凌晨则顺延到当天
+
+        注意：返回值是 UTC 朴素时间（与心跳时间戳同基准），因此断言
+        必须先转换成本地时刻再比对 —— 直接 strftime 会得到 UTC 的
+        读数，看起来像"没顺延到 07:00"。
+        """
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="23:00", quiet_hours_end="07:00")
 
-        clock.set(2026, 10, 4, 23, 30)
+        clock.set_local(2026, 10, 4, 23, 30)
         end = svc._quiet_hours_end_datetime()
-        assert end.strftime("%m-%d %H:%M") == "10-05 07:00"
+        assert end is not None
+        assert clock.as_local(end).strftime("%m-%d %H:%M") == "10-05 07:00"
 
-        clock.set(2026, 10, 5, 2, 0)
+        clock.set_local(2026, 10, 5, 2, 0)
         end = svc._quiet_hours_end_datetime()
-        assert end.strftime("%m-%d %H:%M") == "10-05 07:00"
+        assert end is not None
+        assert clock.as_local(end).strftime("%m-%d %H:%M") == "10-05 07:00"
+
+    def test_end_datetime_is_in_utc_basis(self, frozen_datetime, clock):
+        """
+        顺延时刻必须与传入的 now 同为 UTC 基准
+
+        否则闸门比较会拿 UTC 与本地时间戳相比，永远判为"还没到时间"，
+        提醒会被无限推迟。
+        """
+        svc = make_service(frozen_datetime, quiet_hours_enabled=True,
+                           quiet_hours_start="23:00", quiet_hours_end="07:00")
+
+        clock.set_local(2026, 10, 4, 23, 30)
+        end = svc._quiet_hours_end_datetime()
+        assert end is not None
+        # UTC 朴素时间：无 tzinfo，且不早于当前时刻
+        assert end.tzinfo is None
+        assert end >= clock.now()
 
     async def test_quiet_hours_defer_not_discard(self, frozen_datetime,
                                                  make_heartbeat_result,
@@ -563,7 +588,7 @@ class TestQuietHours:
         """
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="23:00", quiet_hours_end="07:00")
-        clock.set(2026, 10, 4, 22, 0)
+        clock.set_local(2026, 10, 4, 22, 0)
 
         # 22:02 首次告警（阈值 3 次）
         fired = []
@@ -595,7 +620,7 @@ class TestQuietHours:
         """
         svc = make_service(frozen_datetime, quiet_hours_enabled=True,
                            quiet_hours_start="23:00", quiet_hours_end="07:00")
-        clock.set(2026, 10, 4, 22, 0)
+        clock.set_local(2026, 10, 4, 22, 0)
 
         fired = []
         # 22:00 离线，持续到次日 09:00
@@ -605,10 +630,14 @@ class TestQuietHours:
                 fired.append(clock.now())
             clock.advance(minutes=1)
 
-        # 静默期内（23:00-07:00）不应有任何提醒
-        in_quiet = [t for t in fired if t.hour >= 23 or t.hour < 7]
+        # 时钟基准是 UTC（与心跳时间戳一致），静默时段按本地配置，
+        # 因此判断"是否落在静默期"前必须先换算成本地时刻。
+        local_fired = [clock.as_local(t) for t in fired]
+
+        # 静默期内（本地 23:00-07:00）不应有任何提醒
+        in_quiet = [t for t in local_fired if t.hour >= 23 or t.hour < 7]
         assert in_quiet == [], f"静默期内发出了 {len(in_quiet)} 次提醒"
 
         # 静默结束后一小时内不应出现连发
-        after = [t for t in fired if t.strftime("%m-%d %H") == "10-05 07"]
+        after = [t for t in local_fired if t.strftime("%m-%d %H") == "10-05 07"]
         assert len(after) <= 1, f"静默结束后一小时内连发了 {len(after)} 次"
