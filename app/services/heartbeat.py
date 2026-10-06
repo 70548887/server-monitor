@@ -11,6 +11,7 @@ import httpx
 
 from ..services.config import NodeConfig
 from ..services.observability import metrics
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class HeartbeatService:
         Returns:
             HeartbeatResult 检测结果
         """
-        timestamp = datetime.utcnow()
+        timestamp = utcnow()
         timeout_s = node.timeout_ms / 1000.0
         
         start_time = time.perf_counter()
@@ -203,7 +204,7 @@ class HeartbeatService:
                 final_results.append(HeartbeatResult(
                     node_name=node.name,
                     url=node.url,
-                    timestamp=datetime.utcnow(),
+                    timestamp=utcnow(),
                     status_code=0,
                     latency_ms=0,
                     success=False,

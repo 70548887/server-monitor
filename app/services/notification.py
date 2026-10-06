@@ -90,6 +90,7 @@ from ..models.notification_channel import (
     NotificationRecipientModel
 )
 from ..models.base import get_session_context
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -1019,7 +1020,7 @@ class NotificationService:
             )
             channel = result.scalar_one_or_none()
             if channel:
-                channel.last_sent_at = datetime.utcnow()
+                channel.last_sent_at = utcnow()
                 channel.send_count += 1
                 if not success:
                     channel.error_count += 1

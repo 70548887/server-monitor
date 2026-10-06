@@ -35,6 +35,7 @@ from ..models.base import (
 )
 from ..models.node import NodeModel
 from ..models.sample import SampleModel, AggregateModel
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class MySQLRepository:
                 sample = SampleModel(
                     node_name=sample_data["node_name"],
                     url=sample_data["url"],
-                    timestamp=sample_data.get("timestamp", datetime.utcnow()),
+                    timestamp=sample_data.get("timestamp", utcnow()),
                     status_code=sample_data.get("status_code", 0),
                     latency_ms=sample_data["latency_ms"],
                     success=sample_data.get("success", False),
@@ -201,7 +202,7 @@ class MySQLRepository:
                     node.last_status_code = status_code
                     node.last_latency_ms = latency_ms
                     node.last_error = error
-                    node.last_check_at = datetime.utcnow()
+                    node.last_check_at = utcnow()
                     
                     if success:
                         node.consecutive_failures = 0
@@ -235,7 +236,7 @@ class MySQLRepository:
         Returns:
             删除的样本数量
         """
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
         
         try:
             async with self._get_session_manager() as session:
@@ -288,7 +289,7 @@ class MySQLRepository:
         lookback = lookback_minutes if lookback_minutes is not None else hours * 60
 
         # 只汇总"已经结束"的窗口，避免把当前不完整的窗口写进去后又被覆盖
-        now = datetime.utcnow()
+        now = utcnow()
         end_time = now - timedelta(seconds=window_seconds)
         start_time = end_time - timedelta(minutes=lookback)
 
@@ -408,7 +409,7 @@ class MySQLRepository:
             {node_name: {"uptime": 百分比, "total": 样本数, "success": 成功数}}
             传入 node_name 时只返回该节点。
         """
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
 
         try:
             async with self._get_session_manager() as session:
@@ -449,7 +450,7 @@ class MySQLRepository:
 
     async def cleanup_old_aggregates(self, days: int = 90) -> int:
         """清理过期聚合快照"""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow() - timedelta(days=days)
         try:
             async with self._get_session_manager() as session:
                 result = await session.execute(
@@ -663,7 +664,7 @@ class MySQLRepository:
                     await session.delete(node)
                     logger.info(f"Node hard deleted from DB: name={name}")
                 else:
-                    node.deleted_at = datetime.utcnow()
+                    node.deleted_at = utcnow()
                     node.enabled = False
                     logger.info(f"Node soft deleted in DB: name={name}")
                 
@@ -767,7 +768,7 @@ class MySQLRepository:
                     SampleModel(
                         node_name=s["node_name"],
                         url=s["url"],
-                        timestamp=s.get("timestamp", datetime.utcnow()),
+                        timestamp=s.get("timestamp", utcnow()),
                         status_code=s.get("status_code", 0),
                         latency_ms=s["latency_ms"],
                         success=s.get("success", False),
@@ -808,7 +809,7 @@ class MySQLRepository:
             - 只返回当前数据库中存在的节点的样本
             - 已删除节点的样本不会返回
         """
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = utcnow() - timedelta(hours=hours)
         
         try:
             async with self._get_session_manager() as session:

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from app.models.admin import Admin
 from app.models.base import get_session_context
 from app.repositories.redis_repository import RedisRepository
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class MemorySessionStore:
                 self._evict_oldest()
             
             self._sessions[key] = data
-            self._expiry[key] = datetime.utcnow() + timedelta(seconds=expire_seconds)
+            self._expiry[key] = utcnow() + timedelta(seconds=expire_seconds)
     
     def get(self, key: str) -> Optional[dict]:
         """获取 Session"""
@@ -53,7 +54,7 @@ class MemorySessionStore:
                 return None
             
             # 检查是否过期
-            if datetime.utcnow() > self._expiry.get(key, datetime.min):
+            if utcnow() > self._expiry.get(key, datetime.min):
                 self._delete(key)
                 return None
             
@@ -74,7 +75,7 @@ class MemorySessionStore:
     
     def _cleanup_expired(self):
         """清理过期 Session"""
-        now = datetime.utcnow()
+        now = utcnow()
         expired_keys = [k for k, exp in self._expiry.items() if exp < now]
         for key in expired_keys:
             self._delete(key)
@@ -142,7 +143,7 @@ class AuthService:
                 
                 if admin and self.verify_password(password, admin.password_hash):
                     # 更新最后登录时间
-                    admin.last_login = datetime.utcnow()
+                    admin.last_login = utcnow()
                     await session.commit()
                     logger.info(f"管理员登录成功: {username}")
                     return admin
@@ -161,7 +162,7 @@ class AuthService:
                     id=0,
                     username=username,
                     is_active=True,
-                    created_at=datetime.utcnow()
+                    created_at=utcnow()
                 )
             
         logger.warning(f"登录失败: {username}")
@@ -180,7 +181,7 @@ class AuthService:
         session_data = {
             "admin_id": str(admin_id),
             "username": username,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": utcnow().isoformat(),
         }
         
         # 尝试存储到 Redis
@@ -263,7 +264,7 @@ class AuthService:
                     id=0,
                     username=env_username,
                     is_active=True,
-                    created_at=datetime.utcnow()
+                    created_at=utcnow()
                 )
             return None
     
@@ -410,7 +411,7 @@ async def create_default_admin(username: str = None, password: str = None):
                 password_hash=password_hash,
                 email=None,
                 is_active=True,
-                created_at=datetime.utcnow(),
+                created_at=utcnow(),
             )
             session.add(admin)
             await session.commit()

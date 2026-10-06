@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 import logging
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ class AvailabilityService:
         # 最新状态缓存
         self._latest_status: dict[str, AvailabilityStats] = {}
         # 上次清理时间
-        self._last_cleanup = datetime.utcnow()
+        self._last_cleanup = utcnow()
         # 清理间隔（小时）
         self._cleanup_interval_hours = 1
     
@@ -121,14 +122,14 @@ class AvailabilityService:
     
     def _maybe_cleanup(self):
         """检查并执行定期清理（已持有锁）"""
-        now = datetime.utcnow()
+        now = utcnow()
         if (now - self._last_cleanup).total_seconds() >= self._cleanup_interval_hours * 3600:
             self._cleanup_expired_records()
             self._last_cleanup = now
     
     def _cleanup_expired_records(self):
         """清理过期记录（已持有锁）"""
-        cutoff = datetime.utcnow() - timedelta(hours=self.RETENTION_HOURS)
+        cutoff = utcnow() - timedelta(hours=self.RETENTION_HOURS)
         total_removed = 0
         
         for node_name, records in list(self._records.items()):
@@ -170,7 +171,7 @@ class AvailabilityService:
         if not records:
             return AvailabilityStats(node_name=node_name)
         
-        now = datetime.utcnow()
+        now = utcnow()
         cutoff_24h = now - timedelta(hours=24)
         cutoff_7d = now - timedelta(days=7)
         cutoff_30d = now - timedelta(days=30)
@@ -268,7 +269,7 @@ class AvailabilityService:
             if not records:
                 return []
             
-            now = datetime.utcnow()
+            now = utcnow()
             # 当前小时的开始时间
             current_hour = now.replace(minute=0, second=0, microsecond=0)
             # 起始小时（hours 小时前，不包含当前小时，所以是 hours-1）
@@ -323,7 +324,7 @@ class AvailabilityService:
             if not records:
                 return []
             
-            now = datetime.utcnow()
+            now = utcnow()
             cutoff = now - timedelta(days=days)
             
             # 按天分组
@@ -373,7 +374,7 @@ class AvailabilityService:
             if not records:
                 return []
             
-            now = datetime.utcnow()
+            now = utcnow()
             # 当前小时的开始时间
             current_hour = now.replace(minute=0, second=0, microsecond=0)
             # 起始小时（hours 小时前）

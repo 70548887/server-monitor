@@ -17,12 +17,13 @@ from ..schemas.notification import (
     NotificationRecipientResponse,
 )
 from ..services.notification import (
-    NotificationService, 
+    NotificationService,
     NotificationLogService,
     NotificationRecipientService,
     get_notification_service,
     get_notification_log_service,
 )
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,7 @@ async def test_notification(data: NotificationTestRequest):
         success=True,
         message="测试通知发送成功",
         channel_name=channel["name"],
-        sent_at=datetime.utcnow(),
+        sent_at=utcnow(),
     )
 
 

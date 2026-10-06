@@ -107,10 +107,15 @@ def clock():
 @pytest.fixture
 def frozen_datetime(clock, monkeypatch):
     """
-    把 alerting / incident 模块里的 datetime 替换为假时钟
+    把 alerting / incident 模块里的时间来源替换为假时钟
 
-    心跳间隔、抑制窗口、阶梯节奏都基于 datetime.now()，
-    测试必须能控制它才能断言"跨午夜不再爆发"这类行为。
+    心跳间隔、抑制窗口、阶梯节奏都依赖时间，必须能控制才能断言
+    "跨午夜不再爆发"这类行为。
+
+    要 patch 两处，缺一不可：
+      1. 模块内的 datetime 类 —— 供 datetime.now() / utcnow() 调用
+      2. 模块内的 utcnow 函数 —— 时间已统一收敛到 timeutil.utcnow()，
+         它是以模块级名字导入的，替换 datetime 类对它无效
     """
 
     class PatchedDatetime(datetime):
@@ -122,14 +127,20 @@ def frozen_datetime(clock, monkeypatch):
         def utcnow(cls):
             return clock.current
 
+    def patched_utcnow():
+        return clock.current
+
     import app.services.alerting as alerting_mod
 
     monkeypatch.setattr(alerting_mod, "datetime", PatchedDatetime)
+    monkeypatch.setattr(alerting_mod, "utcnow", patched_utcnow)
 
     try:
         import app.services.incident as incident_mod
 
         monkeypatch.setattr(incident_mod, "datetime", PatchedDatetime)
+        # incident 模块可能没有 utcnow 这个名字（视其是否使用而定）
+        monkeypatch.setattr(incident_mod, "utcnow", patched_utcnow, raising=False)
     except ImportError:
         pass
 

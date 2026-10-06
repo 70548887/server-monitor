@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from ..services.observability import metrics
 from ..services.scheduler import get_scheduler
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ async def liveness_probe():
     """
     return {
         "status": "alive",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
     }
 
 
@@ -71,7 +72,7 @@ async def readiness_probe():
     
     response = {
         "ready": is_ready,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         "checks": {
             "scheduler": scheduler_ready,
             "mysql": mysql_ready,
@@ -99,7 +100,7 @@ async def scheduler_health():
     status = scheduler.get_status()
     
     return {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         **status,
     }
 
@@ -152,7 +153,7 @@ async def ping_storage():
         }
     
     return {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         "results": results,
     }
 
@@ -180,7 +181,7 @@ async def database_health():
         logger.error(f"数据库 ping 失败: {e}")
     
     response = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         "available": db_status["available"] and ping_ok,
         "last_error": db_status["last_error"],
         "ping": {
@@ -208,7 +209,7 @@ async def database_reconnect():
     db_status = get_db_status()
     
     response = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         "reconnect_success": success,
         "available": db_status["available"],
         "last_error": db_status["last_error"],

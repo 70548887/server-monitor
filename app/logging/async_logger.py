@@ -21,6 +21,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 from typing import Optional
+from ..utils.timeutil import utcnow
 
 # ========== 支持的日志级别 ==========
 # 从低到高: DEBUG(10) < INFO(20) < WARNING(30) < ERROR(40) < CRITICAL(50)
@@ -80,7 +81,7 @@ class SimpleJsonFormatter(logging.Formatter):
         from datetime import datetime
         
         log_obj = {
-            "ts": datetime.utcnow().isoformat() + "Z",
+            "ts": utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

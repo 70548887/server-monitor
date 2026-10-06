@@ -15,39 +15,9 @@ from .config import get_config, AlertingConfig
 from .heartbeat import HeartbeatResult
 from ..models.base import get_session_context
 from ..models.notification_channel import AlertLogModel
+from ..utils.timeutil import to_local_time, utcnow
 
 logger = logging.getLogger(__name__)
-
-
-def to_local_time(
-    ts: Optional[datetime],
-    assume_utc: bool = True,
-) -> Optional[datetime]:
-    """
-    把时间戳转换为本地时间，供"按本地时刻"的判定使用
-
-    为什么需要：心跳时间戳由 datetime.utcnow() 生成（UTC），而静默时段
-    这类配置是用户按本地时刻填写的（如"23:00-07:00"）。两者直接比较会
-    整体错位 —— 在 UTC+8 上，拿 UTC 时间戳去套 23:00-07:00，实际静默的
-    是本地 07:00-15:00，与用户意图恰好相反。
-
-    存储层统一用 UTC（日志中 asctime 是本地、timestamp 是 UTC），
-    因此在做任何"本地时刻"判定前必须先转换。
-
-    Args:
-        ts: 待转换的时间戳
-        assume_utc: 朴素时间戳是否按 UTC 解释。默认 True，对应心跳与
-                    数据库的写入约定；调用方已持有本地时间时传 False。
-    """
-    if ts is None:
-        return None
-    if ts.tzinfo is not None:
-        # 已带时区：直接换算
-        return ts.astimezone()
-    if assume_utc:
-        return ts.replace(tzinfo=timezone.utc).astimezone()
-    # 已是本地朴素时间，无需转换
-    return ts
 
 
 def _format_duration_cn(seconds: Optional[int]) -> str:
@@ -525,7 +495,7 @@ class AlertingService:
         # 静默时段是用户按本地时刻配置的，必须先做时区转换。
         # 直接用 UTC 比较会让静默窗口整体错位（UTC+8 上偏 8 小时）。
         local_now = to_local_time(
-            now if now is not None else datetime.utcnow(),
+            now if now is not None else utcnow(),
             assume_utc=assume_utc,
         )
         if local_now is None:
@@ -559,7 +529,7 @@ class AlertingService:
         if not end or not start:
             return None
 
-        base = now if now is not None else datetime.utcnow()
+        base = now if now is not None else utcnow()
 
         # 非静默时段没有"结束时刻"可言
         if not self._in_quiet_hours(base, assume_utc=assume_utc):

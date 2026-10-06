@@ -7,6 +7,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 
 from prometheus_client import Counter, Histogram, Gauge, Info, REGISTRY, generate_latest
+from ..utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ class Metrics:
             self.monitor_heartbeat_errors_total.inc()
         
         # 更新调度器统计
-        self.scheduler_stats.last_run_at = datetime.utcnow()
+        self.scheduler_stats.last_run_at = utcnow()
         self.scheduler_stats.runs_total += 1
         self.scheduler_stats.last_duration_seconds = duration_seconds
         if not success:
