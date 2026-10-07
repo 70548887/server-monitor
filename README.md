@@ -7,14 +7,14 @@
 ```bash
 # 1. 安装依赖
 pip install -r requirements.txt
+#    注意：email-validator 是 notifications 路由的硬依赖，缺它应用无法导入
 
 # 2. 配置环境变量
 cp .env.example .env
-#    编辑 .env，至少填写 ADMIN_PASSWORD 与 MySQL 密码
-#    注意：email-validator 是 notifications 路由的硬依赖，务必装齐
+#    至少填写 ADMIN_PASSWORD 与 MySQL 凭据
 
-# 3. 初始化数据库（创建表 + 事件表迁移）
-python scripts/migrate_phase2_incidents.py
+# 3. 建库建表（含 Phase 2 事件表与补列，幂等可重复执行）
+python scripts/bootstrap_database.py
 
 # 4. 启动
 uvicorn app.main:app --host 0.0.0.0 --port 8080
@@ -22,8 +22,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 访问 `http://localhost:8080`，用 `.env` 中的管理员账号登录。
 
+启动后会自动创建默认管理员与通知渠道（凭据取自 `.env`）。
+
 > 数据库不可用时应用会降级为内存模式运行（数据不持久化），
-> 便于在没有 MySQL 的环境下先跑起来看界面。
+> 便于在没有 MySQL 的环境下先跑起来看界面。但此时**无法登录**
+> ——管理员账户存储在数据库中。
+
+### 从备份恢复
+
+```bash
+# 导入 SQL dump（流式读取，GB 级文件不爆内存；--to-innodb 转为事务引擎）
+python scripts/import_sql.py backup.sql --to-innodb
+
+# 备份通常来自旧版本，可能缺少新表与新列，需再跑一次引导
+python scripts/bootstrap_database.py
+```
+
+导出的 `.sql` 文件已被 `.gitignore` 排除（体积大且含真实业务数据）。
 
 ## 架构
 
@@ -58,6 +73,26 @@ tests/                 251 个测试用例
 2. 每日上限按自然日计数 → 午夜归零后立刻重新爆发一轮
 
 根因是去重的锚点绑在**日历**上，而故障与日历无关。
+
+### 生产数据佐证
+
+从旧库导出的 9101 条通知记录可以量化这个问题：
+
+| 日期 | 发送成功率 |
+|---|---|
+| 2026-02 | 97.2% |
+| 2026-04 | 25.7% |
+| 2026-08 | 37.1% |
+| 2026-10 | **23.3%** |
+
+失败原因 100% 是 `发送被限制: 今日发送已达上限（20次）`，而非 SMTP 故障。
+
+最典型的一例：`Bilibili API B` 与 `汉堡WEB` 两个节点自 2026-09-21/22 起完全离线
+（连续 16 天成功率 0%），旧系统在 2026-10-07 单日各产生 **60 条** `node_down`
+告警——内容逐字相同，合计 120 条中仅 40 条送达，80 条被限流丢弃。
+
+按本设计的阶梯节奏，这两天本应各约 4~5 条，**浪费约 110 条**。
+真正的告警被限流挤掉，是比刷屏更隐蔽的损害。
 
 ### 现状：一次故障 = 一个事件
 
@@ -157,7 +192,8 @@ python -m pytest -v           # 详细输出
 | `app/services/availability.py` | 内存可用性统计（48 小时窗口） |
 | `app/repositories/mysql_repository.py` | 持久化与聚合读写 |
 | `app/utils/timeutil.py` | 时间工具（UTC 取值、时区换算） |
-| `scripts/migrate_phase2_incidents.py` | 事件表迁移（幂等） |
+| `scripts/bootstrap_database.py` | 建库建表 + Phase 2 迁移（幂等，凭据取自配置） |
+| `scripts/import_sql.py` | SQL dump 流式导入，支持 `--to-innodb` |
 
 ## 时间约定
 
