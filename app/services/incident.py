@@ -303,6 +303,48 @@ class IncidentService:
             logger.debug(f"Failed to bump incident failures: {e}")
 
     @staticmethod
+    async def has_delivered_down_alert(incident_id: int) -> Optional[bool]:
+        """
+        该事件是否确实**送达**过 node_down 通知
+
+        恢复通知的前提是用户此前知道节点离线过。如果一条都没送达
+        （提醒被静默时段顺延、渠道故障、限流丢弃、或事件由重启前的
+        遗留状态创建），那么"已恢复"这条通知会让人莫名其妙：
+        我从没收到过离线告警，为什么收到恢复提醒？
+
+        注意判定依据是 notification_logs 中 success=True 的记录，
+        而不是 incident.notify_count —— 后者只表示"尝试发过"，
+        发送失败时它照样递增。
+
+        Args:
+            incident_id: 事件ID
+
+        Returns:
+            True  - 送达过，应发恢复通知
+            False - 从未送达，不应发恢复通知
+            None  - 查询失败（数据库不可用），调用方应保守放行
+        """
+        try:
+            async with get_session_context() as session:
+                from ..models.notification_channel import NotificationLogModel
+
+                stmt = select(func.count(NotificationLogModel.id)).where(
+                    and_(
+                        NotificationLogModel.incident_id == incident_id,
+                        NotificationLogModel.alert_type == "node_down",
+                        NotificationLogModel.success == True,  # noqa: E712
+                    )
+                )
+                result = await session.execute(stmt)
+                count = result.scalar() or 0
+                return count > 0
+        except Exception as e:
+            logger.warning(
+                f"Failed to check delivered alerts for incident {incident_id}: {e}"
+            )
+            return None  # 查询失败：交给调用方决定，倾向放行
+
+    @staticmethod
     async def resolve_incident(incident_id: int, resolved_at: Optional[datetime] = None) -> Optional[dict]:
         """
         关闭事件

@@ -430,16 +430,32 @@ class AlertingService:
             incident = await IncidentService.get_open_incident(node_name, "node_down")
 
             if incident is None:
-                # 没有对应的事件（例如进程重启后事件已丢失）
-                # 仍发出恢复通知，但不带事件汇总信息
+                # 没有对应的事件（例如进程重启后事件丢失）
+                # 无从判断此前是否送达过，保持发送以免漏掉恢复信号
                 events.append(self._build_recovery_event(result, recovery_intent, None))
             else:
-                snapshot = await IncidentService.resolve_incident(incident["id"])
-                events.append(self._build_recovery_event(result, recovery_intent, snapshot))
-                logger.info(
-                    f"Alert triggered: node_recovery for {node_name} "
-                    f"(incident={incident['id']}, duration={snapshot.get('duration_seconds') if snapshot else None}s)"
-                )
+                # 只有此前**确实送达**过离线通知，才发恢复通知。
+                # 否则用户会收到一条莫名其妙的"已恢复"——他从未收到过离线告警。
+                delivered = await IncidentService.has_delivered_down_alert(incident["id"])
+
+                if delivered is False:
+                    # 一条都没送达过：静默关闭事件，不发恢复通知
+                    await IncidentService.resolve_incident(incident["id"])
+                    logger.info(
+                        f"Recovery notification skipped: node={node_name}, "
+                        f"incident={incident['id']}（此前无离线通知送达，"
+                        f"发恢复通知会造成困惑）"
+                    )
+                else:
+                    snapshot = await IncidentService.resolve_incident(incident["id"])
+                    events.append(
+                        self._build_recovery_event(result, recovery_intent, snapshot)
+                    )
+                    logger.info(
+                        f"Alert triggered: node_recovery for {node_name} "
+                        f"(incident={incident['id']}, "
+                        f"duration={snapshot.get('duration_seconds') if snapshot else None}s)"
+                    )
 
             # 事件结束，清除 node_down / latency 抑制，避免影响下一次故障。
             # 保留 node_recovery 的抑制：否则抖动节点每次上下线都会发恢复通知。

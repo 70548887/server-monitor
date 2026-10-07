@@ -219,6 +219,10 @@ class MemoryIncidentService:
         self.rows = {}
         self._next_id = 1
         self.deferrals = []
+        # 标记哪些事件"确实送达过 node_down 通知"，
+        # 供恢复通知的判定逻辑使用。测试中按需写入。
+        self.delivered_down = set()
+
     async def get_open_incident(self, node_name, alert_type):
         for r in self.rows.values():
             if (
@@ -278,6 +282,9 @@ class MemoryIncidentService:
         if last_error:
             r["last_error"] = last_error
         r["total_failures"] += failure_delta
+        # 真实实现中发送成功才会写 notification_logs(success=True)，
+        # 这里用 record_notification 被调用表示"已送达"
+        self.delivered_down.add(incident_id)
         return dict(r)
 
     async def defer_notification(self, incident_id, until, last_error=None,
@@ -314,6 +321,15 @@ class MemoryIncidentService:
         snapshot["status"] = "resolved"
         snapshot["duration_seconds"] = r["duration_seconds"]
         return snapshot
+
+    async def has_delivered_down_alert(self, incident_id):
+        """
+        是否确实送达过 node_down 通知
+
+        由测试通过 delivered_down 集合显式控制，
+        用来验证"未送达则不发恢复通知"这一行为。
+        """
+        return incident_id in self.delivered_down
 
 
 @pytest.fixture

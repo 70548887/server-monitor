@@ -496,6 +496,175 @@ class TestCrossMidnight:
         assert len(incident_store.rows) == 1, "一次故障应只有一个事件"
 
 
+# ===================== 恢复通知的送达前提 =====================
+
+
+class TestRecoveryRequiresPriorDelivery:
+    """
+    未送达过离线通知时，不应发恢复通知
+
+    背景：用户报告"没发送的时候节点恢复了还会发送提醒"。
+    场景如：故障发生在静默时段内，提醒被顺延从未送达；
+    或渠道故障/限流导致发送失败。节点随后恢复，若仍发"已恢复"，
+    收件人从未收到过对应的离线告警，会莫名其妙。
+    """
+
+    async def _fail_then_recover(self, frozen_datetime, make_heartbeat_result,
+                                 incident_store, clock, quiet=False):
+        """制造一次故障并恢复，返回 (事件列表, 事件对象)"""
+        params = {}
+        if quiet:
+            params = dict(quiet_hours_enabled=True,
+                          quiet_hours_start="23:00", quiet_hours_end="07:00")
+        svc = make_service(frozen_datetime, **params)
+
+        clock.set_local(2026, 10, 4, 22, 0)
+
+        # 故障：达到连续失败阈值
+        for _ in range(3):
+            await svc.evaluate(make_heartbeat_result(success=False))
+
+        incident = list(incident_store.rows.values())[0]
+
+        # 恢复
+        clock.advance(minutes=150)  # 00:30
+        events = await svc.evaluate(make_heartbeat_result(success=True))
+        return events, incident, svc
+
+    async def test_recovery_sent_when_down_alert_delivered(
+        self, frozen_datetime, make_heartbeat_result, incident_store, clock
+    ):
+        """送达过离线通知 -> 正常发恢复通知"""
+        events, incident, _ = await self._fail_then_recover(
+            frozen_datetime, make_heartbeat_result, incident_store, clock
+        )
+
+        recovery = [e for e in events if e.alert_type == "node_recovery"]
+        assert len(recovery) == 1, "送达过离线通知时应发恢复通知"
+        assert recovery[0].incident_duration_s is not None
+
+    async def test_recovery_skipped_when_nothing_delivered(
+        self, frozen_datetime, make_heartbeat_result, incident_store, clock
+    ):
+        """
+        一条都没送达 -> 不发恢复通知
+
+        模拟：提醒被静默时段顺延，从未真正发出。
+        """
+        events, incident, _ = await self._fail_then_recover(
+            frozen_datetime, make_heartbeat_result, incident_store, clock
+        )
+
+        # 手工标记"从未送达"
+        incident_store.delivered_down.discard(incident["id"])
+
+        # 重新走一遍恢复流程
+        clock.set_local(2026, 10, 4, 23, 0)
+        for _ in range(3):
+            await make_service(frozen_datetime,
+                               quiet_hours_enabled=True,
+                               quiet_hours_start="23:00",
+                               quiet_hours_end="07:00").evaluate(
+                make_heartbeat_result(success=False)
+            )
+        inc2 = list(incident_store.rows.values())[-1]
+        incident_store.delivered_down.discard(inc2["id"])
+
+        svc = make_service(frozen_datetime, quiet_hours_enabled=True,
+                           quiet_hours_start="23:00", quiet_hours_end="07:00")
+        clock.advance(minutes=90)
+        events2 = await svc.evaluate(make_heartbeat_result(success=True))
+
+        recovery = [e for e in events2 if e.alert_type == "node_recovery"]
+        assert recovery == [], "未送达过离线通知时不应发恢复通知"
+
+    async def test_incident_still_closed_when_recovery_skipped(
+        self, frozen_datetime, make_heartbeat_result, incident_store, clock
+    ):
+        """
+        即使不发恢复通知，事件也必须关闭
+
+        否则事件永远处于 open，下次故障会复用旧事件，
+        提醒节奏会从上次故障的锚点继续算 —— 完全错乱。
+        """
+        svc = make_service(frozen_datetime, quiet_hours_enabled=True,
+                           quiet_hours_start="23:00", quiet_hours_end="07:00")
+        clock.set_local(2026, 10, 4, 23, 0)
+
+        for _ in range(3):
+            await svc.evaluate(make_heartbeat_result(success=False))
+
+        inc = list(incident_store.rows.values())[0]
+        incident_store.delivered_down.discard(inc["id"])
+
+        clock.advance(minutes=90)
+        await svc.evaluate(make_heartbeat_result(success=True))
+
+        assert incident_store.rows[inc["id"]]["status"] == "resolved", (
+            "不发恢复通知时事件也必须关闭"
+        )
+
+    async def test_recovery_sent_when_incident_missing(
+        self, frozen_datetime, make_heartbeat_result, incident_store, clock
+    ):
+        """
+        事件不存在（进程重启导致丢失）-> 保持发送
+
+        无从判断此前是否送达过，恢复通知是唯一的收尾信号，
+        此时静默会让故障"没有结束"。
+        """
+        svc = make_service(frozen_datetime)
+
+        for _ in range(3):
+            await svc.evaluate(make_heartbeat_result(success=False))
+
+        # 模拟重启：事件丢失
+        incident_store.rows.clear()
+
+        events = await svc.evaluate(make_heartbeat_result(success=True))
+        recovery = [e for e in events if e.alert_type == "node_recovery"]
+        assert len(recovery) == 1
+
+
+class TestHasDeliveredDownAlert:
+    """送达判定的返回值语义
+
+    这些用例不打真库 —— 用内存桩验证契约，避免测试依赖数据库连接。
+    """
+
+    async def test_returns_false_when_no_delivery(self, incident_store):
+        """未送达应返回 False（而非 None）"""
+        result = await incident_store.has_delivered_down_alert(1)
+        assert result is False, f"应返回 False，实际 {result}"
+
+    async def test_returns_true_when_delivered(self, incident_store):
+        """送达过应返回 True"""
+        incident_store.delivered_down.add(42)
+        result = await incident_store.has_delivered_down_alert(42)
+        assert result is True
+
+    async def test_returns_none_on_db_failure(self, monkeypatch):
+        """
+        查询失败返回 None，交由调用方放行
+
+        数据库不可用时不能因为判定不出就静默恢复通知 ——
+        那会让故障"没有结束"。None 明确区分于 False。
+        """
+        from contextlib import asynccontextmanager
+
+        from app.services import incident as incident_mod
+
+        @asynccontextmanager
+        async def broken():
+            raise RuntimeError("模拟数据库不可用")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(incident_mod, "get_session_context", broken)
+
+        result = await incident_mod.IncidentService.has_delivered_down_alert(1)
+        assert result is None, "查询失败应返回 None 而非 False"
+
+
 # ===================== 静默时段 =====================
 
 
