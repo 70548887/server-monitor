@@ -158,14 +158,18 @@ async def node_detail(request: Request, name: str):
 @router.get("/alerts", response_class=HTMLResponse)
 async def alerts_list(request: Request):
     """
-    告警列表页面
+    告警页面
+
+    数据由前端 JS 拉取（事件视图 + 告警记录），模板不注入数据。
     """
-    return templates.TemplateResponse(request,
-        "alerts.html", {
-        "request": request,
-        "title": "监控面板 - 告警",
-        "alerts": [],  # TODO: 从存储获取告警列表
-    })
+    return templates.TemplateResponse(
+        request,
+        "alerts.html",
+        {
+            "request": request,
+            "title": "监控面板 - 告警",
+        },
+    )
 
 
 @router.get("/notifications", response_class=HTMLResponse)

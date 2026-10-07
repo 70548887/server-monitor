@@ -47,8 +47,7 @@ def load_env_file() -> Optional[Path]:
 @dataclass
 class DatabaseConfig:
     """数据库配置"""
-    engine: str = "mysql"
-    
+
     # MySQL
     mysql_host: str = "localhost"
     mysql_port: int = 3306
@@ -71,7 +70,8 @@ class SchedulerConfig:
     """调度器配置"""
     interval_seconds: int = 60
     concurrency: int = 50
-    timeout_seconds: float = 5.0
+    # 瞬时错误（超时/连接失败）的重试次数与初始退避。
+    # 节点自身的超时用 NodeConfig.timeout_ms，此处不重复配置。
     retry_count: int = 3
     retry_delay_ms: int = 200
 
@@ -194,8 +194,7 @@ def _parse_database_config(data: dict) -> DatabaseConfig:
         REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB
     """
     config = DatabaseConfig()
-    config.engine = data.get("engine", "mysql")
-    
+
     # ========== MySQL 配置（环境变量优先） ==========
     mysql = data.get("mysql", {})
     config.mysql_host = os.getenv("MYSQL_HOST", mysql.get("host", "localhost"))
@@ -282,7 +281,6 @@ def load_config(
         config.scheduler = SchedulerConfig(
             interval_seconds=sched.get("interval_seconds", 60),
             concurrency=sched.get("concurrency", 50),
-            timeout_seconds=sched.get("timeout_seconds", 5.0),
             retry_count=sched.get("retry_count", 3),
             retry_delay_ms=sched.get("retry_delay_ms", 200),
         )

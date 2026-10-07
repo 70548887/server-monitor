@@ -94,8 +94,27 @@ class TestSchedulerConfig:
         cfg = SchedulerConfig()
         assert cfg.interval_seconds == 60
         assert cfg.concurrency > 0
-        assert cfg.timeout_seconds > 0
         assert cfg.retry_count >= 0
+        assert cfg.retry_delay_ms >= 0
+
+    def test_no_dead_timeout_field(self):
+        """
+        timeout_seconds 已移除
+
+        节点的超时由各自的 NodeConfig.timeout_ms 决定，
+        调度器级的 timeout_seconds 从未被消费 —— 保留它会让人
+        以为改这里能影响实际超时。
+        """
+        cfg = SchedulerConfig()
+        assert not hasattr(cfg, "timeout_seconds")
+
+    def test_retry_config_is_wired(self):
+        """重试配置真的传到了心跳服务（曾出现配置声明有但代码没实现）"""
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService(retry_count=5, retry_delay_ms=50)
+        assert svc.heartbeat_service.retry_count == 5
+        assert svc.heartbeat_service.retry_delay_ms == 50
 
 
 class TestAlertingConfig:
@@ -137,6 +156,20 @@ class TestAlertingConfig:
         )
         assert cfg.alerting.suppress_minutes == 240
         assert list(cfg.alerting.reminder_intervals) == [0, 60, 240, 480, 720]
+
+    def test_yaml_retry_config_loaded(self):
+        """app.yaml 声明的重试配置真的被解析（曾是虚假承诺）"""
+        cfg = load_config(
+            app_config_path=str(CONFIG_DIR / "app.yaml"),
+            nodes_config_path=str(CONFIG_DIR / "nodes.yaml"),
+        )
+        assert cfg.scheduler.retry_count == 3
+        assert cfg.scheduler.retry_delay_ms == 200
+
+    def test_no_dead_database_engine_field(self):
+        """database.engine 已移除 —— 解析后从无任何分支消费"""
+        cfg = DatabaseConfig()
+        assert not hasattr(cfg, "engine")
 
 
 class TestEnvironmentOverride:

@@ -50,7 +50,7 @@ from app.routes.auth import router as auth_router
 from app.routes.notifications import router as notifications_router
 from app.routes.nodes import update_node_status_from_result
 from app.middleware.auth import AuthMiddleware
-from app.middleware.security import SecurityMiddleware
+from app.middleware.security import SecurityMiddleware, TrustedHostMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -425,16 +425,41 @@ async def custom_404_handler(request: Request, exc):
 app.add_middleware(SecurityMiddleware)
 
 # CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 不使用通配符：allow_origins=["*"] 与 allow_credentials=True 的组合
+# 会被浏览器直接拒绝（规范禁止），等于既没生效又留下错误印象。
+# 前后端同源部署时 CORS 根本不需要；这里默认关闭，
+# 需要跨域时在 .env 里配置明确的来源白名单。
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info(f"CORS 已启用，允许来源: {_allowed_origins}")
+else:
+    logger.info("CORS 未启用（前后端同源部署）")
 
 # GZip 压缩
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# 可信主机校验 - 防止 Host 头攻击
+# 需在 .env 中配置 ALLOWED_HOSTS（逗号分隔）才会启用。
+# 不配置时不注册：默认放行，否则本地调试会被误拦。
+_allowed_hosts = [
+    h.strip()
+    for h in os.getenv("ALLOWED_HOSTS", "").split(",")
+    if h.strip()
+]
+if _allowed_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+    logger.info(f"TrustedHost 已启用，允许主机: {_allowed_hosts}")
 
 # 认证中间件
 app.add_middleware(AuthMiddleware)

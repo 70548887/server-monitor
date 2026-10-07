@@ -10,8 +10,6 @@ app:
 # 注意：敏感信息（密码）建议通过环境变量配置，参见 .env.example
 # 环境变量优先级高于此文件
 database:
-  # 可选: mysql, redis, hybrid
-  engine: mysql
   mysql:
     host: "127.0.0.1"     # 可用环境变量 MYSQL_HOST 覆盖
     port: 3306            # 可用环境变量 MYSQL_PORT 覆盖
@@ -31,9 +29,11 @@ database:
 scheduler:
   interval_seconds: 60      # 心跳检测间隔（秒）
   concurrency: 50           # 最大并发数
-  timeout_seconds: 5        # 默认超时时间
-  retry_count: 3            # 重试次数
-  retry_delay_ms: 200       # 重试初始延迟（毫秒）
+  # 瞬时错误（超时/连接失败）的重试，指数退避。
+  # 抖动型故障往往第二次就成功，能显著降低误报率。
+  # 单次请求的超时用各节点自己的 timeout_ms（见 nodes 表）。
+  retry_count: 3            # 重试次数（不含首次）
+  retry_delay_ms: 200       # 重试初始延迟（毫秒），后续按 2 倍递增
 
 # 告警配置
 alerting:

@@ -9,21 +9,38 @@
 
 {% block content %}
 <div class="alerts-page">
-    <h1>告警列表</h1>
-    
+    <h1>告警</h1>
+
+    <!-- 视图切换 -->
+    <div class="view-switch" style="display:flex;gap:8px;margin-bottom:15px;align-items:center;">
+        <button class="btn btn-sm btn-primary" id="view-incidents" onclick="switchView('incidents')">
+            故障事件
+        </button>
+        <button class="btn btn-sm btn-secondary" id="view-logs" onclick="switchView('logs')">
+            告警记录
+        </button>
+        <span style="color:#888;font-size:12px;margin-left:10px;" id="view-hint">
+            按故障聚合：一次故障 = 一个事件，可展开查看每次提醒
+        </span>
+    </div>
+
     <!-- 统计卡片 -->
-    <div class="stats-cards" style="display:flex;gap:20px;margin-bottom:20px;">
+    <div class="stats-cards" style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap;">
         <div class="stat-card" style="border-left-color:#dc3545;">
-            <div class="stat-label">活跃告警</div>
+            <div class="stat-label">进行中的故障</div>
             <div class="stat-value" id="alert-active-count" style="color:#dc3545;">0</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">今日告警</div>
             <div class="stat-value" id="alert-today-total">0</div>
         </div>
-        <div class="stat-card" style="border-left-color:#dc3545;">
-            <div class="stat-label">节点离线</div>
-            <div class="stat-value" id="alert-node-down" style="color:#dc3545;">0</div>
+        <div class="stat-card" style="border-left-color:#6c757d;">
+            <div class="stat-label">累计故障事件</div>
+            <div class="stat-value" id="alert-total-incidents">0</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#17a2b8;">
+            <div class="stat-label">累计提醒次数</div>
+            <div class="stat-value" id="alert-total-notified">0</div>
         </div>
         <div class="stat-card" style="border-left-color:#28a745;">
             <div class="stat-label">节点恢复</div>
@@ -34,65 +51,111 @@
             <div class="stat-value" id="alert-latency-high" style="color:#ffc107;">0</div>
         </div>
     </div>
-    
-    <!-- 过滤器 -->
-    <div class="filters" style="margin-bottom:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <select id="alert-filter-type" style="padding:5px 10px;">
-            <option value="">全部类型</option>
-            <option value="node_down">节点离线</option>
-            <option value="node_recovery">节点恢复</option>
-            <option value="latency_high">延迟告警</option>
-        </select>
-        <select id="alert-filter-status" style="padding:5px 10px;">
-            <option value="">全部状态</option>
-            <option value="active">活跃</option>
-            <option value="acknowledged">已确认</option>
-            <option value="resolved">已解决</option>
-        </select>
-        <div class="date-range-group" style="display:flex;gap:5px;align-items:center;">
-            <input type="date" id="alert-filter-start" style="padding:5px 10px;" title="开始日期">
-            <span>至</span>
-            <input type="date" id="alert-filter-end" style="padding:5px 10px;" title="结束日期">
+
+    <!-- ============ 故障事件视图 ============ -->
+    <div id="incidents-view">
+        <div class="filters" style="margin-bottom:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="incident-filter-status" style="padding:5px 10px;">
+                <option value="open">进行中</option>
+                <option value="">全部</option>
+                <option value="resolved">已恢复</option>
+            </select>
+            <button class="btn btn-sm btn-primary" onclick="loadIncidents(0)">查询</button>
+            <div style="flex:1;"></div>
+            <span style="color:#888;font-size:12px;">
+                提醒节奏：立即 → 1h → 5h → 13h → 25h → 每 12h
+            </span>
         </div>
-        <div class="quick-date-btns" style="display:flex;gap:5px;">
-            <button class="btn btn-sm btn-outline" onclick="setDateRange('today')" title="今天">今天</button>
-            <button class="btn btn-sm btn-outline" onclick="setDateRange('week')" title="最近7天">近7天</button>
-            <button class="btn btn-sm btn-outline" onclick="setDateRange('month')" title="最近30天">近30天</button>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:40px;"></th>
+                    <th>故障开始</th>
+                    <th>节点</th>
+                    <th>类型</th>
+                    <th>已持续</th>
+                    <th>提醒</th>
+                    <th>累计失败</th>
+                    <th>下次提醒</th>
+                    <th>状态</th>
+                </tr>
+            </thead>
+            <tbody id="incidents-tbody"></tbody>
+        </table>
+
+        <div id="incidents-empty" class="empty-state" style="display:none;">
+            <p>当前没有故障事件</p>
         </div>
-        <button class="btn btn-sm btn-primary" onclick="loadAlerts()">查询</button>
-        <button class="btn btn-sm btn-secondary" onclick="resetFilters()">重置</button>
-        <div style="flex:1;"></div>
-        <button class="btn btn-sm btn-danger" id="batch-delete-btn" onclick="batchDeleteAlerts()" style="display:none;">
-            删除选中 (<span id="selected-count">0</span>)
-        </button>
+
+        <div class="pagination" style="margin-top:15px;display:flex;justify-content:space-between;align-items:center;">
+            <span id="incidents-info">共 0 条事件</span>
+            <div>
+                <button class="btn btn-sm" id="incidents-prev" onclick="loadIncidents(incidentsOffset - 20)" disabled>上一页</button>
+                <button class="btn btn-sm" id="incidents-next" onclick="loadIncidents(incidentsOffset + 20)">下一页</button>
+            </div>
+        </div>
     </div>
-    
-    <table class="table">
-        <thead>
-            <tr>
-                <th style="width:40px;"><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
-                <th>触发时间</th>
-                <th>告警类型</th>
-                <th>节点</th>
-                <th>告警消息</th>
-                <th>通知状态</th>
-                <th>状态</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody id="alerts-tbody"></tbody>
-    </table>
-    
-    <div id="alerts-empty" class="empty-state" style="display:none;">
-        <p>暂无告警记录</p>
-    </div>
-    
-    <!-- 分页 -->
-    <div class="pagination" style="margin-top:15px;display:flex;justify-content:space-between;align-items:center;">
-        <span id="alerts-info">共 0 条记录</span>
-        <div>
-            <button class="btn btn-sm" id="alerts-prev" onclick="loadAlerts(alertsOffset - 50)" disabled>上一页</button>
-            <button class="btn btn-sm" id="alerts-next" onclick="loadAlerts(alertsOffset + 50)">下一页</button>
+
+    <!-- ============ 告警记录视图 ============ -->
+    <div id="logs-view" style="display:none;">
+        <div class="filters" style="margin-bottom:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="alert-filter-type" style="padding:5px 10px;">
+                <option value="">全部类型</option>
+                <option value="node_down">节点离线</option>
+                <option value="node_recovery">节点恢复</option>
+                <option value="latency_high">延迟告警</option>
+            </select>
+            <select id="alert-filter-status" style="padding:5px 10px;">
+                <option value="">全部状态</option>
+                <option value="active">活跃</option>
+                <option value="acknowledged">已确认</option>
+                <option value="resolved">已解决</option>
+            </select>
+            <div class="date-range-group" style="display:flex;gap:5px;align-items:center;">
+                <input type="date" id="alert-filter-start" style="padding:5px 10px;" title="开始日期">
+                <span>至</span>
+                <input type="date" id="alert-filter-end" style="padding:5px 10px;" title="结束日期">
+            </div>
+            <div class="quick-date-btns" style="display:flex;gap:5px;">
+                <button class="btn btn-sm btn-outline" onclick="setDateRange('today')" title="今天">今天</button>
+                <button class="btn btn-sm btn-outline" onclick="setDateRange('week')" title="最近7天">近7天</button>
+                <button class="btn btn-sm btn-outline" onclick="setDateRange('month')" title="最近30天">近30天</button>
+            </div>
+            <button class="btn btn-sm btn-primary" onclick="loadAlerts()">查询</button>
+            <button class="btn btn-sm btn-secondary" onclick="resetFilters()">重置</button>
+            <div style="flex:1;"></div>
+            <button class="btn btn-sm btn-danger" id="batch-delete-btn" onclick="batchDeleteAlerts()" style="display:none;">
+                删除选中 (<span id="selected-count">0</span>)
+            </button>
+        </div>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:40px;"><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
+                    <th>触发时间</th>
+                    <th>告警类型</th>
+                    <th>节点</th>
+                    <th>告警消息</th>
+                    <th>通知状态</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="alerts-tbody"></tbody>
+        </table>
+
+        <div id="alerts-empty" class="empty-state" style="display:none;">
+            <p>暂无告警记录</p>
+        </div>
+
+        <div class="pagination" style="margin-top:15px;display:flex;justify-content:space-between;align-items:center;">
+            <span id="alerts-info">共 0 条记录</span>
+            <div>
+                <button class="btn btn-sm" id="alerts-prev" onclick="loadAlerts(alertsOffset - 50)" disabled>上一页</button>
+                <button class="btn btn-sm" id="alerts-next" onclick="loadAlerts(alertsOffset + 50)">下一页</button>
+            </div>
         </div>
     </div>
 </div>

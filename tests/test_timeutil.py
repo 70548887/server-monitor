@@ -161,23 +161,78 @@ class TestNoDeprecatedCalls:
 
     def test_no_utcnow_in_app_code(self):
         """
-        项目代码不应再直接调用 datetime.utcnow()
+        项目代码不应再直接引用 datetime.utcnow
 
         Python 3.12 起该方法已弃用，未来版本会移除。
         时间获取统一走 app.utils.timeutil.utcnow()。
+
+        注意匹配两种形态：
+          - 调用形式：datetime.utcnow()
+          - 引用形式：default=datetime.utcnow（无括号，作为默认值传入）
+        后者曾被漏掉 —— 早期版本只检查带括号的形式，
+        导致 4 处引用形式的弃用调用长期存在。
         """
+        import re
         from pathlib import Path
 
         root = Path(__file__).parent.parent / "app"
         offenders = []
 
+        # 同时匹配调用与引用形式
+        pattern = re.compile(r"datetime\s*\.\s*utcnow")
+
         for py_file in root.rglob("*.py"):
             if py_file.name == "timeutil.py":
                 continue  # 定义处不算
             content = py_file.read_text(encoding="utf-8")
-            if "datetime.utcnow()" in content:
+            if pattern.search(content):
                 offenders.append(py_file.relative_to(root).as_posix())
 
         assert not offenders, (
-            f"以下文件仍在调用已弃用的 datetime.utcnow(): {offenders}"
+            f"以下文件仍在引用已弃用的 datetime.utcnow: {offenders}"
+        )
+
+    def test_no_utcnow_in_tests_either(self):
+        """
+        测试代码同样不应实际调用弃用方法
+
+        注释与文档字符串里提及 "datetime.utcnow" 是合理的
+        （本文件就在解释为何弃用它），因此只检查代码行。
+        """
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).parent
+        offenders = []
+        # 匹配真实调用：datetime.utcnow( 后跟左括号
+        call_pattern = re.compile(r"datetime\s*\.\s*utcnow\s*\(")
+        # 本文件需要直接调用弃用方法做等价性对照，故豁免
+        exempt = {Path(__file__).name}
+
+        for py_file in root.rglob("*.py"):
+            if py_file.name in exempt:
+                continue
+            content = py_file.read_text(encoding="utf-8")
+
+            # 逐行剔除注释；文档字符串内的提及不算
+            in_docstring = False
+            for lineno, line in enumerate(content.splitlines(), 1):
+                stripped = line.strip()
+
+                # 跟踪三引号文档字符串
+                if stripped.count('"""') == 1:
+                    in_docstring = not in_docstring
+                    continue
+                if in_docstring:
+                    continue
+                if stripped.startswith("#"):
+                    continue
+                # 行内注释之前的部分
+                code = line.split("#", 1)[0]
+
+                if call_pattern.search(code):
+                    offenders.append(f"{py_file.name}:{lineno}")
+
+        assert not offenders, (
+            f"测试代码仍在调用已弃用的 datetime.utcnow(): {offenders}"
         )

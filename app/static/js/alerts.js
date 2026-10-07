@@ -1,26 +1,244 @@
 let alertsOffset = 0;
 let alertsTotal = 0;
+let incidentsOffset = 0;
+let incidentsTotal = 0;
+let currentView = 'incidents';
 
-// 页面加载
+// 页面加载：默认展示事件视图
 document.addEventListener('DOMContentLoaded', () => {
     loadAlertsStats();
-    loadAlerts();
+    loadIncidents(0);
 });
+
+/** 切换视图 */
+function switchView(view) {
+    currentView = view;
+
+    const incView = document.getElementById('incidents-view');
+    const logView = document.getElementById('logs-view');
+    const btnInc = document.getElementById('view-incidents');
+    const btnLog = document.getElementById('view-logs');
+    const hint = document.getElementById('view-hint');
+
+    const showInc = view === 'incidents';
+    incView.style.display = showInc ? 'block' : 'none';
+    logView.style.display = showInc ? 'none' : 'block';
+
+    btnInc.className = showInc ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary';
+    btnLog.className = showInc ? 'btn btn-sm btn-secondary' : 'btn btn-sm btn-primary';
+
+    if (hint) {
+        hint.textContent = showInc
+            ? '按故障聚合：一次故障 = 一个事件，可展开查看每次提醒'
+            : '逐条告警记录（同一故障的多次提醒都会出现）';
+    }
+
+    if (showInc) {
+        loadIncidents(incidentsOffset);
+    } else {
+        loadAlerts(alertsOffset);
+    }
+}
+
+/** 把秒数格式化为易读的时长 */
+function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined) return '-';
+    seconds = Math.max(0, Math.floor(seconds));
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+
+    if (days > 0) return `${days}天${hours}小时`;
+    if (hours > 0) return `${hours}小时${mins}分`;
+    return `${mins}分钟`;
+}
+
+/** 统计卡片：加载事件维度的数据 */
+async function loadIncidentStats() {
+    try {
+        const res = await fetch('/api/notifications/incidents/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const activeEl = document.getElementById('alert-active-count');
+        const totalEl = document.getElementById('alert-total-incidents');
+        const notifiedEl = document.getElementById('alert-total-notified');
+
+        if (activeEl) activeEl.textContent = data.open_incidents || 0;
+        if (totalEl) {
+            totalEl.textContent = (data.open_incidents || 0) + (data.resolved_incidents || 0);
+        }
+        if (notifiedEl) notifiedEl.textContent = data.open_notifications || 0;
+    } catch (e) {
+        console.error('Failed to load incident stats:', e);
+    }
+}
+
+/** 加载故障事件列表 */
+async function loadIncidents(offset = 0) {
+    incidentsOffset = Math.max(0, offset);
+
+    const statusEl = document.getElementById('incident-filter-status');
+    const status = statusEl ? statusEl.value : 'open';
+
+    let url = `/api/notifications/incidents?limit=20&offset=${incidentsOffset}`;
+    if (status) url += `&status=${status}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        incidentsTotal = data.total || 0;
+
+        const tbody = document.getElementById('incidents-tbody');
+        const emptyState = document.getElementById('incidents-empty');
+        if (!tbody) return;
+
+        const list = data.incidents || [];
+
+        if (list.length === 0) {
+            tbody.innerHTML = '';
+            if (emptyState) emptyState.style.display = 'block';
+        } else {
+            if (emptyState) emptyState.style.display = 'none';
+
+            const typeNames = {
+                'node_down': '节点离线',
+                'latency_high': '延迟过高',
+            };
+
+            tbody.innerHTML = list.map(inc => {
+                const isOpen = inc.status === 'open';
+                // 进行中的事件实时计算持续时长；已关闭的用落库值
+                const duration = isOpen
+                    ? formatDuration((Date.now() - new Date(inc.started_at).getTime()) / 1000)
+                    : formatDuration(inc.duration_seconds);
+
+                // 下次提醒时间：已关闭的事件没有
+                const nextCell = isOpen && inc.next_notify_at
+                    ? `<span style="color:#17a2b8;">${formatTime(inc.next_notify_at)}</span>`
+                    : '<span style="color:#aaa;">-</span>';
+
+                return `
+                <tr data-id="${inc.id}">
+                    <td>
+                        <button class="btn btn-sm btn-outline" onclick="toggleIncidentDetail(${inc.id})"
+                                id="inc-toggle-${inc.id}" title="查看提醒历史">展开</button>
+                    </td>
+                    <td>${formatTime(inc.started_at)}</td>
+                    <td><a href="/ui/nodes/${encodeURIComponent(inc.node_name)}"><strong>${inc.node_name}</strong></a></td>
+                    <td>
+                        <span class="badge ${inc.alert_type === 'node_down' ? 'badge-danger' : 'badge-warning'}">
+                            ${typeNames[inc.alert_type] || inc.alert_type}
+                        </span>
+                    </td>
+                    <td><strong>${duration}</strong></td>
+                    <td>${inc.notify_count || 0} 次</td>
+                    <td>${inc.total_failures || 0}</td>
+                    <td>${nextCell}</td>
+                    <td>
+                        <span class="badge ${isOpen ? 'badge-danger' : 'badge-success'}">
+                            ${isOpen ? '进行中' : '已恢复'}
+                        </span>
+                    </td>
+                </tr>
+                <tr id="inc-detail-${inc.id}" style="display:none;background:#f8f9fa;">
+                    <td colspan="9">
+                        <div id="inc-detail-body-${inc.id}" style="padding:10px;">
+                            <span style="color:#888;">加载中...</span>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 分页信息
+        const start = incidentsTotal > 0 ? incidentsOffset + 1 : 0;
+        const end = Math.min(incidentsOffset + 20, incidentsTotal);
+        const infoEl = document.getElementById('incidents-info');
+        const prevEl = document.getElementById('incidents-prev');
+        const nextEl = document.getElementById('incidents-next');
+
+        if (infoEl) {
+            infoEl.textContent = `共 ${incidentsTotal} 条事件${incidentsTotal > 0 ? `，当前显示 ${start}-${end}` : ''}`;
+        }
+        if (prevEl) prevEl.disabled = incidentsOffset === 0;
+        if (nextEl) nextEl.disabled = incidentsOffset + 20 >= incidentsTotal;
+
+        loadIncidentStats();
+    } catch (e) {
+        console.error('Failed to load incidents:', e);
+    }
+}
+
+/** 展开/收起某个事件的提醒历史 */
+async function toggleIncidentDetail(incidentId) {
+    const row = document.getElementById(`inc-detail-${incidentId}`);
+    const btn = document.getElementById(`inc-toggle-${incidentId}`);
+    if (!row) return;
+
+    // 已展开则收起
+    if (row.style.display !== 'none') {
+        row.style.display = 'none';
+        if (btn) btn.textContent = '展开';
+        return;
+    }
+
+    row.style.display = 'table-row';
+    if (btn) btn.textContent = '收起';
+
+    const body = document.getElementById(`inc-detail-body-${incidentId}`);
+    if (!body) return;
+
+    try {
+        const res = await fetch(`/api/notifications/incidents/${incidentId}/notifications`);
+        const data = await res.json();
+        const logs = data.notifications || [];
+
+        if (logs.length === 0) {
+            body.innerHTML = '<span style="color:#888;">该事件尚无通知发送记录</span>';
+            return;
+        }
+
+        const rows = logs.map(log => {
+            const ok = log.success;
+            return `
+            <tr style="background:#fff;">
+                <td style="padding:4px 8px;">${formatTime(log.sent_at)}</td>
+                <td style="padding:4px 8px;">第 ${log.notify_seq ?? '-'} 次</td>
+                <td style="padding:4px 8px;">${log.channel_name}</td>
+                <td style="padding:4px 8px;">
+                    <span class="badge ${ok ? 'badge-success' : 'badge-secondary'}">
+                        ${ok ? '已送达' : '未送达'}
+                    </span>
+                </td>
+                <td style="padding:4px 8px;color:#666;">${(log.subject || '').substring(0, 60)}</td>
+                ${log.error_message ? `<td style="padding:4px 8px;color:#dc3545;font-size:12px;">${log.error_message.substring(0, 50)}</td>` : '<td></td>'}
+            </tr>`;
+        }).join('');
+
+        body.innerHTML = `
+            <div style="font-size:13px;color:#666;margin-bottom:8px;">
+                该故障共提醒 <strong>${data.count}</strong> 次（提醒节奏自动递减，避免刷屏）
+            </div>
+            <table class="table" style="font-size:13px;">
+                <thead><tr><th>时间</th><th>第几次</th><th>渠道</th><th>结果</th><th>主题</th><th>错误</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        body.innerHTML = `<span style="color:#dc3545;">加载失败: ${e.message}</span>`;
+    }
+}
 
 async function loadAlertsStats() {
     try {
         const res = await fetch('/api/notifications/alerts/logs/stats');
         const data = await res.json();
 
-        const activeCountEl = document.getElementById('alert-active-count');
         const todayTotalEl = document.getElementById('alert-today-total');
-        const nodeDownEl = document.getElementById('alert-node-down');
         const nodeRecoveryEl = document.getElementById('alert-node-recovery');
         const latencyHighEl = document.getElementById('alert-latency-high');
 
-        if (activeCountEl) activeCountEl.textContent = data.active_count || 0;
         if (todayTotalEl) todayTotalEl.textContent = data.today_total || 0;
-        if (nodeDownEl) nodeDownEl.textContent = data.by_type?.node_down || 0;
         if (nodeRecoveryEl) nodeRecoveryEl.textContent = data.by_type?.node_recovery || 0;
         if (latencyHighEl) latencyHighEl.textContent = data.by_type?.latency_high || 0;
     } catch (e) {

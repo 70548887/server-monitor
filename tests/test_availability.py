@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.utils.timeutil import utcnow
 from app.services.availability import (
     AvailabilityService,
     AvailabilityStats,
@@ -15,7 +16,7 @@ from app.services.availability import (
 def make_record(node_name="n1", success=True, latency_ms=100.0, ts=None, status_code=200):
     return HeartbeatRecord(
         node_name=node_name,
-        timestamp=ts or datetime.utcnow(),
+        timestamp=ts or utcnow(),
         success=success,
         latency_ms=latency_ms,
         status_code=status_code,
@@ -53,12 +54,12 @@ class TestHourlyStats:
     """每小时统计"""
 
     def test_availability_calculation(self):
-        s = HourlyStats(hour=datetime.utcnow(), total=100, success=95)
+        s = HourlyStats(hour=utcnow(), total=100, success=95)
         assert s.availability == 95.0
 
     def test_availability_no_data(self):
         """无数据时视为 100%，避免图表上出现空洞"""
-        s = HourlyStats(hour=datetime.utcnow())
+        s = HourlyStats(hour=utcnow())
         assert s.availability == 100.0
 
     @pytest.mark.parametrize("total,success,expected", [
@@ -70,19 +71,19 @@ class TestHourlyStats:
         (1000, 0, "down"),
     ])
     def test_status_thresholds(self, total, success, expected):
-        s = HourlyStats(hour=datetime.utcnow(), total=total, success=success)
+        s = HourlyStats(hour=utcnow(), total=total, success=success)
         assert s.status == expected
 
     def test_status_up(self):
-        s = HourlyStats(hour=datetime.utcnow(), total=10, success=10)
+        s = HourlyStats(hour=utcnow(), total=10, success=10)
         assert s.status == "up"
 
     def test_status_degraded(self):
-        s = HourlyStats(hour=datetime.utcnow(), total=10, success=9)
+        s = HourlyStats(hour=utcnow(), total=10, success=9)
         assert s.status == "degraded"
 
     def test_status_down(self):
-        s = HourlyStats(hour=datetime.utcnow(), total=10, success=5)
+        s = HourlyStats(hour=utcnow(), total=10, success=5)
         assert s.status == "down"
 
 
@@ -160,7 +161,7 @@ class TestAvailabilityService:
 
     def test_get_hourly_trend(self, service):
         """趋势按小时聚合，且返回固定数量的数据点"""
-        now = datetime.utcnow()
+        now = utcnow()
         for i in range(10):
             service.add_record(make_record(ts=now - timedelta(minutes=i)))
 
@@ -173,7 +174,7 @@ class TestAvailabilityService:
 
     def test_get_latency_trend(self, service):
         """延迟趋势包含平均/最小/最大等字段"""
-        now = datetime.utcnow()
+        now = utcnow()
         for i in range(10):
             service.add_record(make_record(latency_ms=100 + i, ts=now - timedelta(minutes=i)))
 

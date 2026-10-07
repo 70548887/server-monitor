@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from app.utils.timeutil import utcnow
+
 
 class AggregateCreate(BaseModel):
     """创建聚合"""
@@ -27,7 +29,7 @@ class AggregateCreate(BaseModel):
 class Aggregate(AggregateCreate):
     """聚合（含 ID）"""
     id: int = Field(..., description="聚合 ID")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    created_at: datetime = Field(default_factory=utcnow, description="创建时间(UTC)")
 
     class Config:
         from_attributes = True

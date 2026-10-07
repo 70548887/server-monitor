@@ -24,16 +24,41 @@ SESSION_COOKIE_NAME = "session_id"
 SESSION_COOKIE_MAX_AGE = 24 * 60 * 60  # 24小时
 
 
+def _cookie_secure_enabled() -> bool:
+    """
+    会话 Cookie 是否标记 secure（仅 HTTPS 传输）
+
+    默认按环境变量 COOKIE_SECURE 判定：
+      - 生产（HTTPS）：应设为 true，Cookie 不随明文 HTTP 泄露
+      - 本地调试（HTTP）：必须为 false，否则浏览器不保存 cookie，
+        表现为"登录成功后立刻被踢回登录页"
+
+    显式设置优于自动探测：应用通常跑在 nginx 反代之后，
+    自身看到的 scheme 未必等于浏览器看到的。
+    """
+    val = os.getenv("COOKIE_SECURE", "").strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    # 未配置时保守起见不启用 secure（避免本地开发无法登录）
+    logger.warning(
+        "COOKIE_SECURE 未设置，会话 Cookie 未标记 secure。"
+        "生产环境（HTTPS）请在 .env 中设置 COOKIE_SECURE=true"
+    )
+    return False
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: Optional[str] = None):
     """登录页面"""
     return templates.TemplateResponse(
         request,
-             "login.html",
+        "login.html",
         {
-            "request": request, 
-            "error": error
-        }
+            "request": request,
+            "error": error,
+        },
     )
 
 
@@ -85,7 +110,7 @@ async def login(
     if not captcha_id or captcha_x is None:
         return templates.TemplateResponse(
             request,
-                 "login.html",
+            "login.html",
             {"request": request, "error": "请先完成人机验证"},
             status_code=400
         )
@@ -94,7 +119,7 @@ async def login(
     if not is_valid:
         return templates.TemplateResponse(
             request,
-                 "login.html",
+            "login.html",
             {"request": request, "error": "验证码校验失败，请重试"},
             status_code=400
         )
@@ -108,7 +133,7 @@ async def login(
     if is_locked:
         return templates.TemplateResponse(
             request,
-                 "login.html",
+            "login.html",
             {
                 "request": request, 
                 "error": f"登录尝试次数过多，请 {remaining // 60 + 1} 分钟后重试"
@@ -131,7 +156,7 @@ async def login(
         # 登录失败，返回登录页面并显示错误
         return templates.TemplateResponse(
             request,
-                 "login.html",
+            "login.html",
             {"request": request, "error": error_msg},
             status_code=401
         )
@@ -141,7 +166,7 @@ async def login(
     
     # 创建会话
     session_id = await auth_service.create_session(admin.id, admin.username)
-    
+
     # 设置 Cookie 并重定向到首页
     redirect_response = RedirectResponse(url="/", status_code=302)
     redirect_response.set_cookie(
@@ -150,8 +175,11 @@ async def login(
         max_age=SESSION_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
+        # 仅在 HTTPS 下传输。本地 HTTP 调试时必须关闭，
+        # 否则浏览器不会保存 cookie，表现为"登录后立刻被踢回登录页"。
+        secure=_cookie_secure_enabled(),
     )
-    
+
     logger.info(f"Admin logged in: {username} from IP: {client_ip}")
     return redirect_response
 
@@ -235,7 +263,7 @@ async def settings_page(
     
     return templates.TemplateResponse(
         request,
-             "settings.html",
+        "settings.html",
         {
             "request": request,
             "username": session_data.get("username"),

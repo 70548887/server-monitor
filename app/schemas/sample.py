@@ -4,12 +4,14 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from app.utils.timeutil import utcnow
+
 
 class SampleCreate(BaseModel):
     """创建样本"""
     node_name: str = Field(..., description="节点名称")
     url: str = Field(..., description="请求 URL")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="采样时间")
+    timestamp: datetime = Field(default_factory=utcnow, description="采样时间(UTC)")
     status_code: int = Field(default=0, description="HTTP 状态码，0 表示请求失败")
     latency_ms: float = Field(..., ge=0, description="响应延迟(毫秒)")
     success: bool = Field(default=True, description="是否成功")

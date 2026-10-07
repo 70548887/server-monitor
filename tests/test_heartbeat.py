@@ -236,6 +236,164 @@ class TestHeartbeatResult:
         assert result.body_matched is True
 
 
+class TestHeartbeatRetry:
+    """瞬时错误重试
+
+    背景：app.yaml 曾声明 retry_count: 3 但代码里完全没有重试逻辑，
+    属于"配置承诺了、代码没实现"的虚假承诺。此类测试防止回归。
+    """
+
+    def _service(self, handler, **kwargs):
+        service = make_service(handler)
+        service.retry_count = kwargs.get("retry_count", 2)
+        service.retry_delay_ms = kwargs.get("retry_delay_ms", 1)
+        return service
+
+    async def test_timeout_is_retried(self):
+        """超时属瞬时错误，应重试后成功"""
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise httpx.TimeoutException("timed out", request=request)
+            return httpx.Response(200, text="ok")
+
+        service = self._service(handler, retry_count=2)
+        try:
+            result = await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert result.success is True
+        assert len(attempts) == 3, "前两次超时后第三次应成功"
+
+    async def test_connection_error_is_retried(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            if len(attempts) < 2:
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(200, text="ok")
+
+        service = self._service(handler, retry_count=2)
+        try:
+            result = await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert result.success is True
+        assert len(attempts) == 2
+
+    async def test_status_mismatch_not_retried(self):
+        """
+        状态码不符是真实故障，不重试
+
+        重试只会推迟告警并浪费配额。
+        """
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            return httpx.Response(500, text="boom")
+
+        service = self._service(handler, retry_count=3)
+        try:
+            result = await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert result.success is False
+        assert len(attempts) == 1, "状态码不符不应重试"
+
+    async def test_body_mismatch_not_retried(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            # 响应体不含期望关键字 —— 真实故障，不应重试
+            return httpx.Response(200, text="ERROR")
+
+        node = make_node(expect=NodeExpectConfig(status=200, body_contains="healthy"))
+        service = self._service(handler, retry_count=3)
+        try:
+            result = await service.check_node(node)
+        finally:
+            await service.close()
+
+        assert result.success is False
+        assert result.error_type == "BodyMismatch"
+        assert len(attempts) == 1
+
+    async def test_retries_exhausted(self):
+        """重试用尽后仍失败，尝试次数 = retry_count + 1"""
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            raise httpx.TimeoutException("timed out", request=request)
+
+        service = self._service(handler, retry_count=2)
+        try:
+            result = await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert result.success is False
+        assert result.error_type == "Timeout"
+        assert len(attempts) == 3
+
+    async def test_retry_disabled_by_default_zero(self):
+        """retry_count=0 时不重试（保持单次请求的原有语义）"""
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            raise httpx.TimeoutException("timed out", request=request)
+
+        service = make_service(handler)
+        service.retry_count = 0
+        try:
+            result = await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert result.success is False
+        assert len(attempts) == 1
+
+    async def test_metrics_recorded_once_per_check(self, monkeypatch):
+        """
+        重试只产生一条样本
+
+        否则一次检测会写入多条样本，污染成功率与延迟统计。
+        """
+        attempts = []
+
+        def handler(request):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise httpx.TimeoutException("timed out", request=request)
+            return httpx.Response(200, text="ok")
+
+        recorded = []
+        import app.services.heartbeat as hb_mod
+
+        monkeypatch.setattr(
+            hb_mod.metrics, "record_heartbeat",
+            lambda **kw: recorded.append(kw),
+        )
+
+        service = self._service(handler, retry_count=2)
+        try:
+            await service.check_node(make_node())
+        finally:
+            await service.close()
+
+        assert len(attempts) == 3
+        assert len(recorded) == 1, "重试期间只应记录一次指标"
+
+
 class TestHeartbeatModule:
     """模块可导入性与结构"""
 

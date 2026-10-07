@@ -25,11 +25,17 @@ class SchedulerService:
         heartbeat_service: Optional[HeartbeatService] = None,
         interval_seconds: int = 60,
         concurrency: int = 50,
+        retry_count: int = 0,
+        retry_delay_ms: int = 200,
     ):
         self.interval_seconds = interval_seconds
         self.concurrency = concurrency
-        self.heartbeat_service = heartbeat_service or HeartbeatService()
-        
+        self.heartbeat_service = heartbeat_service or HeartbeatService(
+            # 瞬时错误的重试配置（来自 configs/app.yaml）
+            retry_count=retry_count,
+            retry_delay_ms=retry_delay_ms,
+        )
+
         self._scheduler: Optional[AsyncIOScheduler] = None
         self._running = False
         self._on_results_callback: Optional[Callable[[list[HeartbeatResult]], Awaitable[None]]] = None
@@ -314,5 +320,7 @@ def get_scheduler() -> SchedulerService:
         _scheduler_service = SchedulerService(
             interval_seconds=config.scheduler.interval_seconds,
             concurrency=config.scheduler.concurrency,
+            retry_count=config.scheduler.retry_count,
+            retry_delay_ms=config.scheduler.retry_delay_ms,
         )
     return _scheduler_service

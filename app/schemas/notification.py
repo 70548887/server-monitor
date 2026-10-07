@@ -5,6 +5,8 @@ from typing import Optional, List
 from enum import Enum
 from pydantic import BaseModel, Field, EmailStr, field_validator
 
+from app.utils.timeutil import utcnow
+
 
 class ChannelTypeEnum(str, Enum):
     """通知渠道类型"""
@@ -170,4 +172,4 @@ class AlertNotification(BaseModel):
     node_url: str = Field(..., description="节点URL")
     message: str = Field(..., description="告警消息")
     details: Optional[dict] = Field(default=None, description="详细信息")
-    triggered_at: datetime = Field(default_factory=datetime.utcnow, description="触发时间")
+    triggered_at: datetime = Field(default_factory=utcnow, description="触发时间(UTC)")
