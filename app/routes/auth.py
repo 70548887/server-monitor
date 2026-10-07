@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from app.services.auth import get_auth_service, AuthService
 from app.middleware.security import get_rate_limit_store
 from app.utils.network import get_client_ip
-from app.utils.captcha import create_captcha, verify_captcha
+from app.utils.captcha import create_captcha, check_captcha
 
 logger = logging.getLogger(__name__)
 
@@ -71,28 +71,21 @@ async def get_captcha():
 @router.post("/api/auth/captcha/verify")
 async def api_verify_captcha(data: dict):
     """
-    前端实时校验验证码
-    注意：这只是为了提升用户体验，真正的安全校验在登录接口
+    前端拖动结束时实时校验验证码
+
+    只校验不销毁：登录提交时还要再验一次，中间通过 captcha_id 关联。
+    但也不是完全放行——这里同时检查滑动轨迹，让脚本无法靠
+    直接设置样式属性来骗过。
     """
     captcha_id = data.get("id")
     x_offset = data.get("x")
-    
+    trail = data.get("trail")
+
     if not captcha_id or x_offset is None:
         return {"success": False, "message": "参数不完整"}
-    
-    # 校验但不弹出记录（因为登录接口还需要校验一次）
-    # 修改：为了支持两次校验，我们需要在 verify_captcha 中支持不弹出选项
-    # 或者我们在这里校验完后，把结果存入 session 或 允许短暂复用
-    
-    # 简单方案：允许 verify_captcha 接受一个 keep_record 参数
-    from app.utils.captcha import captcha_store
-    if captcha_id not in captcha_store:
-        return {"success": False, "message": "验证码已过期，请刷新"}
-    
-    correct_x = captcha_store[captcha_id]
-    is_valid = abs(correct_x - int(x_offset)) <= 5
-    
-    return {"success": is_valid}
+
+    ok, reason = await check_captcha(captcha_id, x_offset, trail, consume=False)
+    return {"success": ok, "message": reason}
 
 
 @router.post("/login")
@@ -103,10 +96,11 @@ async def login(
     password: str = Form(...),
     captcha_id: str = Form(None),
     captcha_x: int = Form(None),
+    captcha_trail: str = Form(None),  # JSON 序列化的滑动轨迹
     auth_service: AuthService = Depends(get_auth_service),
 ):
     """处理登录请求"""
-    # 验证滑动验证码
+    # 验证滑动验证码（用完即焚，防重放）
     if not captcha_id or captcha_x is None:
         return templates.TemplateResponse(
             request,
@@ -114,13 +108,23 @@ async def login(
             {"request": request, "error": "请先完成人机验证"},
             status_code=400
         )
-    
-    is_valid = await verify_captcha(captcha_id, captcha_x)
-    if not is_valid:
+
+    trail = None
+    if captcha_trail:
+        try:
+            import json as _json
+            trail = _json.loads(captcha_trail)
+        except (ValueError, TypeError):
+            trail = None
+
+    captcha_ok, captcha_reason = await check_captcha(
+        captcha_id, captcha_x, trail, consume=True
+    )
+    if not captcha_ok:
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"request": request, "error": "验证码校验失败，请重试"},
+            {"request": request, "error": captcha_reason},
             status_code=400
         )
 

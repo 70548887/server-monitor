@@ -41,6 +41,7 @@ function initSliderCaptcha() {
     const loginBtn = document.getElementById('loginBtn');
     const captchaIdInput = document.getElementById('captcha_id');
     const captchaXInput = document.getElementById('captcha_x');
+    const captchaTrailInput = document.getElementById('captcha_trail');
     
     if (!container) return;
 
@@ -82,17 +83,37 @@ function initSliderCaptcha() {
         let startX = 0;
         let moveX = 0;
         const maxMove = track.offsetWidth - handle.offsetWidth;
+        // 滑动轨迹：[[x, timeStamp], ...]
+        // 服务端据此判断是否由真人操作 —— 脚本直接设置 left 属性时，
+        // 轨迹要么为空，要么是一条完美的等速直线
+        let trail = [];
+        const trailStart = Date.now();
+
+        function onDown(e) {
+            if (isVerified) return;
+            const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+            startX = clientX;
+            trail = [[0, Date.now() - trailStart]];
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+            document.addEventListener('touchmove', onMove);
+            document.addEventListener('touchend', onEnd);
+        }
 
         function onMove(e) {
             const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
             moveX = clientX - startX;
-            
+
             if (moveX < 0) moveX = 0;
             if (moveX > maxMove) moveX = maxMove;
-            
+
             handle.style.left = moveX + 'px';
             piece.style.left = moveX + 'px';
             fill.style.width = (moveX + 20) + 'px'; // 加上 handle 的一半左右，视觉更自然
+
+            // 记录轨迹，节流到每次移动都记（数据量小，一次拖动几十个点）
+            trail.push([Math.round(moveX), Date.now() - trailStart]);
         }
 
         async function onEnd() {
@@ -110,7 +131,8 @@ function initSliderCaptcha() {
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         id: data.id,
-                        x: Math.round(moveX)
+                        x: Math.round(moveX),
+                        trail: trail
                     })
                 });
                 const result = await res.json();
@@ -120,6 +142,9 @@ function initSliderCaptcha() {
                     isVerified = true;
                     captchaIdInput.value = data.id;
                     captchaXInput.value = Math.round(moveX);
+                    if (captchaTrailInput) {
+                        captchaTrailInput.value = JSON.stringify(trail);
+                    }
                     
                     track.classList.add('slider-success');
                     // 验证成功后保持在当前滑动位置，不再铺满全长
@@ -158,19 +183,8 @@ function initSliderCaptcha() {
             }
         }
 
-        handle.addEventListener('mousedown', (e) => {
-            if (isVerified) return;
-            startX = e.clientX;
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onEnd);
-        });
-
-        handle.addEventListener('touchstart', (e) => {
-            if (isVerified) return;
-            startX = e.touches[0].clientX;
-            document.addEventListener('touchmove', onMove);
-            document.addEventListener('touchend', onEnd);
-        });
+        handle.addEventListener('mousedown', onDown);
+        handle.addEventListener('touchstart', onDown, { passive: true });
     }
 
     loadCaptcha();
