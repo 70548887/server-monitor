@@ -41,6 +41,11 @@ logs/*.log.*
 *.tmp
 *.orig
 
+# 数据库备份/导出（体积大，且含真实业务数据）
+sql/
+*.sql
+*.sql.zip
+
 # 配置写回时可能残留的临时文件
 configs/*.yaml.tmp
 
