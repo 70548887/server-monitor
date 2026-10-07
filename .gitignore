@@ -1,9 +1,13 @@
 # ===== 敏感信息（绝不提交）=====
 .env
-.env.*
+.env.local
+.env.*.local
 !.env.example
 *.pem
 *.key
+*.p12
+id_rsa*
+secrets/
 
 # ===== Python =====
 __pycache__/
@@ -63,4 +67,10 @@ _verify_*.py
 _ladder_check.py
 _check_config.py
 _l*.py
+_check_ci.py
 scratch/
+
+# ===== CI / 构建产物 =====
+coverage.xml
+*.lcov
+node_modules/

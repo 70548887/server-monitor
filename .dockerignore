@@ -1,0 +1,69 @@
+# 构建镜像时排除的内容
+#
+# 注意：.dockerignore 与 .gitignore 是两套独立规则。
+# 这里排除的东西仍会提交到 Git（除 .gitignore 已排除的）。
+
+# Git 相关
+.git/
+.github/
+.gitignore
+
+# 敏感信息 —— 绝不能进镜像层
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+venv/
+.venv/
+env/
+
+# 测试相关（生产镜像不需要）
+tests/
+pytest.ini
+_check_*.py
+_verify_*.py
+
+# 数据与日志
+logs/
+*.log
+sql/
+*.sql
+*.sql.zip
+*.rar
+*.zip
+
+# AI 工具配置（不影响运行）
+.cursor/
+.cursorrules
+AGENTS.md
+CLAUDE.md
+
+# 开发编排（生产镜像用 Dockerfile 单独构建）
+docker-compose.yml
+docker-compose.*.yml
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 文档
+README.md
+CHANGELOG.md

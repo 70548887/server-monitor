@@ -2,7 +2,28 @@
 
 多服务器心跳监控：检测接口可用性、延迟与状态，带告警通知与趋势分析。
 
+当前版本：**v1.0.0**
+
 ## 快速开始
+
+### Docker Compose（推荐）
+
+```bash
+# 1. 配置环境变量
+cp .env.example .env
+#    至少填写 ADMIN_PASSWORD 与 MYSQL_PASSWORD
+
+# 2. 启动（应用 + MySQL + Redis）
+docker compose up -d
+
+# 3. 首次建库建表（一次性）
+docker compose exec app python scripts/bootstrap_database.py
+
+# 4. 访问
+open http://localhost:8080
+```
+
+### 本地开发
 
 ```bash
 # 1. 安装依赖
@@ -206,6 +227,71 @@ python -m pytest -v           # 详细输出
 
 ## 已知限制
 
+- **未接线的 API**：9 个后端端点前端未调用，其中
+  `/api/auth/change-password`、`/api/nodes/reload` 有实际价值待接入
+- **时区约定并存**：`notification_logs.sent_at` 由 `func.now()`
+  （MySQL 本地时）写入，与代码中显式使用的 UTC 并存。两者在各自
+  场景内自洽，但跨表按时间关联查询会有 8 小时偏差
 - **p50/p95/p99 延迟未落库**，聚合表只存窗口内的可用性比例。
   给出未经样本级计算的分位数会显得精确却无依据，故未实现
 - **单实例假设**：内存可用性统计与内存 Session 降级不支持多进程部署
+
+## 版本管理
+
+### 分支模型
+
+```
+master      稳定发布分支，只接收已打标签的版本
+develop     集成分支，日常变更的目标
+feat/xxx    功能分支，从 develop 切出
+fix/xxx     修复分支，从 develop 切出
+```
+
+流程：功能分支 → PR → develop → 合并到 master 时打标签。
+
+### 提交信息
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
+
+```
+feat: 新增能力
+fix: 缺陷修复
+docs: 文档
+refactor: 不改变外部行为的重构
+chore: 构建/运维
+```
+
+标题用中文正文，类型前缀用英文。
+
+### 版本号
+
+遵循语义化版本。改动版本时**三处同步**：
+
+1. `app/__init__.py` 的 `__version__`
+2. `configs/app.yaml` 的 `app.version`
+3. Git 标签：`git tag -a vX.Y.Z -m "说明"`
+
+打标签前确认该提交是可运行状态。历史上
+`v0.1.0-pre` 标记的是首次纳管的快照（页面全 500），
+`v1.0.0` 才是首个可用版本。
+
+### 发布检查清单
+
+- [ ] `python -m pytest` 全部通过
+- [ ] 三处版本号一致
+- [ ] `CHANGELOG.md` 已更新
+- [ ] 若改了数据库结构，`bootstrap_database.py` 已验证
+- [ ] 若改了告警节奏，评估过对通知量的影响
+- [ ] `.env` 未进入版本库
+
+## 安全配置
+
+三项安全开关通过环境变量控制，默认均为保守值：
+
+| 变量 | 默认 | 生产环境建议 |
+|---|---|---|
+| `COOKIE_SECURE` | `false` | `true`（需配合 HTTPS） |
+| `ALLOWED_HOSTS` | 空（不校验） | 填实际域名 |
+| `CORS_ALLOWED_ORIGINS` | 空（不启用） | 仅跨域时填明确来源 |
+
+不要用 `CORS_ALLOWED_ORIGINS=*` —— 与 Cookie 凭证组合会被浏览器拒绝。

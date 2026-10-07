@@ -1,0 +1,89 @@
+# 开发环境：直接用本地 Python 跑，便于热重载
+#
+#   docker compose up dev
+#
+# 生产部署见 README，compose 文件面向"应用 + 依赖"的完整编排。
+
+services:
+  # ---------- 应用 ----------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: server-monitor:1.0.0
+    container_name: server-monitor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # 容器内的服务名，不是 127.0.0.1
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # 容器内为 HTTP，故 cookie 不标记 secure
+      COOKIE_SECURE: "false"
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------- MySQL ----------
+  mysql:
+    image: mysql:8.0
+    container_name: server-monitor-mysql
+    restart: unless-stopped
+    command: >-
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-time-zone=+00:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-server_monitor}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # 用 CMD-SHELL 而非 CMD：mysqladmin 需要读环境变量中的密码，
+      # 数组形式无法在容器内展开 $MYSQL_ROOT_PASSWORD。
+      # 密码不出现在 docker inspect 的 Cmd 数组里。
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # 不对外暴露端口：仅供内部容器访问。
+    # 需要客户端连接时用：docker compose exec mysql mysql -uroot -p
+
+  # ---------- Redis ----------
+  redis:
+    image: redis:7-alpine
+    container_name: server-monitor-redis
+    restart: unless-stopped
+    command: >-
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # 不对外暴露端口：会话与缓存无需外部访问
+
+volumes:
+  mysql-data:
+  redis-data:
+  logs:
