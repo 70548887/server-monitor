@@ -14,6 +14,36 @@ logger = logging.getLogger(__name__)
 _config: Optional["AppConfig"] = None
 
 
+def _project_root() -> Path:
+    """项目根目录（本文件的上一级）"""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def load_env_file() -> Optional[Path]:
+    """
+    加载项目根目录的 .env 到 os.environ
+
+    放在配置模块而非 main.py，是为了保证**所有入口**都能拿到环境变量——
+    迁移脚本、引导脚本、测试等只要调用 load_config() 就自动生效。
+    早期实现只在 main.py 里加载，导致命令行脚本读到的密码为空，
+    表现为 "Access denied ... using password: NO"。
+
+    已存在的 os.environ 变量优先级更高，load_dotenv 默认不会覆盖，
+    因此显式设置的环境变量仍然有效。
+    """
+    env_file = _project_root() / ".env"
+    if not env_file.exists():
+        return None
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(env_file)
+        return env_file
+    except ImportError:
+        logger.warning("python-dotenv 未安装，.env 文件不会被加载")
+        return None
+
+
 @dataclass
 class DatabaseConfig:
     """数据库配置"""
@@ -225,7 +255,10 @@ def load_config(
         AppConfig 实例
     """
     global _config
-    
+
+    # 先加载 .env，保证环境变量覆盖在任何解析之前生效
+    load_env_file()
+
     config = AppConfig()
     
     # 加载应用配置

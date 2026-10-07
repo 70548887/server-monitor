@@ -11,8 +11,11 @@ import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-# ========== 加载环境变量（必须在最开始） ==========
-# 从项目根目录的 .env 文件加载环境变量
+# ========== 加载环境变量 ==========
+# .env 的加载已下沉到 app/services/config.py（load_config 内部调用），
+# 保证迁移脚本、引导脚本等非 main 入口也能读到环境变量。
+# 这里保留 main 的显式加载，以便应用启动最早阶段即可使用，
+# 且不影响功能（load_dotenv 默认不覆盖已存在的环境变量）。
 try:
     from dotenv import load_dotenv
     # 确定项目根目录
