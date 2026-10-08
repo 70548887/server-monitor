@@ -17,6 +17,7 @@ import pytest
 
 import app.services.incident as incident_mod
 from app.services.incident import IncidentService
+from app.utils.timeutil import format_iso_utc
 
 
 class FakeIncidentRow:
@@ -38,21 +39,21 @@ class FakeIncidentRow:
         self.total_failures = kwargs.get("total_failures", 0)
 
     def to_dict(self):
+        # 与 AlertIncidentModel.to_dict 保持一致：
+        # 时间戳来自心跳（UTC），序列化必须带 Z，否则前端按本地解析会早 8 小时
+        from app.utils.timeutil import format_iso_utc
+
         return {
             "id": self.id,
             "node_name": self.node_name,
             "alert_type": self.alert_type,
             "node_url": self.node_url,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "last_notified_at": (
-                self.last_notified_at.isoformat() if self.last_notified_at else None
-            ),
-            "next_notify_at": (
-                self.next_notify_at.isoformat() if self.next_notify_at else None
-            ),
+            "started_at": format_iso_utc(self.started_at),
+            "last_notified_at": format_iso_utc(self.last_notified_at),
+            "next_notify_at": format_iso_utc(self.next_notify_at),
             "notify_count": self.notify_count,
             "status": self.status,
-            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolved_at": format_iso_utc(self.resolved_at),
             "duration_seconds": self.duration_seconds,
             "last_error": self.last_error,
             "total_failures": self.total_failures,
@@ -163,7 +164,7 @@ class TestOpenIncident:
         assert incident["notify_count"] == 0
         assert incident["last_error"] == "连接超时"
         # 首次提醒立即放行
-        assert incident["next_notify_at"] == started.isoformat()
+        assert incident["next_notify_at"] == format_iso_utc(started)
 
     async def test_get_open_incident(self, fake_db):
         await IncidentService.open_incident(
@@ -245,7 +246,7 @@ class TestRecordNotification:
 
         assert updated["notify_count"] == 1
         # 第 1 次之后，闸门指向 +60 分钟
-        assert updated["next_notify_at"] == (started + timedelta(minutes=60)).isoformat()
+        assert updated["next_notify_at"] == format_iso_utc(started + timedelta(minutes=60))
 
     async def test_failure_delta_accumulates(self, fake_db):
         started = datetime(2026, 10, 4, 20, 0)
@@ -299,7 +300,7 @@ class TestDeferNotification:
         updated = await IncidentService.defer_notification(incident["id"], until)
 
         assert updated["notify_count"] == 0, "顺延不应消耗提醒次数"
-        assert updated["next_notify_at"] == until.isoformat()
+        assert updated["next_notify_at"] == format_iso_utc(until)
         assert updated["total_failures"] == 1, "被顺延的失败仍要计入"
 
     async def test_defer_without_until_only_counts_failure(self, fake_db):

@@ -247,10 +247,30 @@ python -m pytest -v           # 详细输出
 
 ## 时间约定
 
-- **存储层**：数据库列为朴素 `DateTime`（未启用 `timezone=True`），统一写入 **UTC 朴素时间**
-- **展示层**：静默时段等配置由用户按**本地时刻**填写，判定前必须先换算
+⚠️ **当前各表约定不统一**，下表是实况（由测试锁定，见
+`tests/test_timezone_convention.py`）。改动任一字段前先看这里。
 
-`app/utils/timeutil.py` 提供两者之间的转换。不要直接用
+| 字段 | 写入方式 | 存储时区 | 序列化 |
+|---|---|---|---|
+| `samples.timestamp` | `utcnow()` | UTC | 趋势图显式加 `Z` |
+| `alert_incidents.*` | 来自心跳时间戳 | UTC | 加 `Z`（`format_iso_utc`） |
+| `alert_logs.triggered_at` | `datetime.now()` | **本地** | 不加 `Z` |
+| `notification_logs.sent_at` | MySQL `func.now()` | **本地** | 不加 `Z` |
+
+**为什么序列化是否带 `Z` 至关重要**：前端 `formatTime()` 用
+`new Date(isoStr)` 解析——带 `Z` 会识别为 UTC 并换算成本地时间显示，
+不带 `Z` 则按本地时间原样显示。因此存储时区与 `Z` 后缀必须匹配，
+否则显示偏差一个时区（UTC+8 环境下即 8 小时）。
+
+新增字段时请先确认落在哪一类，并补对应测试。
+
+**尚未统一的原因与影响**：统一到 UTC 需要迁移
+`alert_logs`（3.3 万行）与 `notification_logs`（9.1 千行），
+且每日发送上限的"当天 0 点"边界需同步改为 UTC 零点
+（否则配额会在本地 08:00 而非 00:00 重置）。迁移前不做，
+因为两表内部自洽，当前显示也是正确的。
+
+`app/utils/timeutil.py` 提供转换工具。不要直接用
 `datetime.now(timezone.utc)` 写库——带时区的对象与已有朴素数据
 混用会产生 8 小时偏差。
 
@@ -258,9 +278,9 @@ python -m pytest -v           # 详细输出
 
 - **未接线的 API**：9 个后端端点前端未调用，其中
   `/api/auth/change-password`、`/api/nodes/reload` 有实际价值待接入
-- **时区约定并存**：`notification_logs.sent_at` 由 `func.now()`
-  （MySQL 本地时）写入，与代码中显式使用的 UTC 并存。两者在各自
-  场景内自洽，但跨表按时间关联查询会有 8 小时偏差
+- **时区约定未统一**：4 个时间字段分属 UTC 与本地两种约定
+  （详见[时间约定](#时间约定)）。当前各表内部自洽、显示正确，
+  但跨表按时间关联查询需先换算。统一需迁移 4.2 万行数据
 - **p50/p95/p99 延迟未落库**，聚合表只存窗口内的可用性比例。
   给出未经样本级计算的分位数会显得精确却无依据，故未实现
 - **单实例假设**：内存可用性统计与内存 Session 降级不支持多进程部署

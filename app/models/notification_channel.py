@@ -219,22 +219,36 @@ class AlertIncidentModel(Base):
         )
 
     def to_dict(self) -> dict:
-        """转换为字典"""
+        """转换为字典
+
+        时间字段约定（重要）：
+            本表的时间戳来自心跳检测结果，是 **UTC 朴素时间**。
+            序列化为带 Z 后缀的 ISO 串，前端 `new Date()` 才能识别为 UTC
+            并换算成本地时间显示。
+
+            若省略 Z，前端会按本地时间解析 —— 时区为 UTC+8 时
+            所有事件时间都会早显示 8 小时。
+
+            对比：AlertLogModel.triggered_at 与 NotificationLogModel.sent_at
+            存的是本地时间，序列化时不能加 Z，否则会多偏 8 小时。
+        """
+        from ..utils.timeutil import format_iso_utc
+
         return {
             "id": self.id,
             "node_name": self.node_name,
             "node_url": self.node_url,
             "alert_type": self.alert_type,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "last_notified_at": self.last_notified_at.isoformat() if self.last_notified_at else None,
-            "next_notify_at": self.next_notify_at.isoformat() if self.next_notify_at else None,
+            "started_at": format_iso_utc(self.started_at),
+            "last_notified_at": format_iso_utc(self.last_notified_at),
+            "next_notify_at": format_iso_utc(self.next_notify_at),
             "notify_count": self.notify_count,
             "status": self.status,
-            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolved_at": format_iso_utc(self.resolved_at),
             "duration_seconds": self.duration_seconds,
             "last_error": self.last_error,
             "total_failures": self.total_failures,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": format_iso_utc(self.created_at),
         }
 
 
