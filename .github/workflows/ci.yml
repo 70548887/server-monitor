@@ -96,6 +96,19 @@ jobs:
         # 捕获语法错误（缺括号、引号不匹配、缩进错误等）
         run: python -m compileall -q app scripts
 
+      - name: 校验锁文件格式
+        # requirements.lock 必须存在且版本精确，否则失去可复现的意义
+        run: |
+          test -f requirements.lock || {
+            echo "错误：缺少 requirements.lock（生产部署依赖它保证可复现）"
+            exit 1
+          }
+          # 每条依赖都应锁定精确版本，不允许出现 >= 或 ~=
+          if grep -nE '^[a-zA-Z].*(>=|<=|~=|>)' requirements.lock; then
+            echo "错误：requirements.lock 中存在非精确版本约束"
+            exit 1
+          fi
+
       - name: 敏感信息扫描
         # .env 不应进入版本库
         run: |

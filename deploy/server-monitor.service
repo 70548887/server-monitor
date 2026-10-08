@@ -1,0 +1,100 @@
+[Unit]
+# 网络就绪后再启动，避免启动瞬间 DNS 未解析导致认证跳转失败
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=servermon
+Group=servermon
+
+# 关键：应用用相对路径定位 configs/ 与 logs/，
+# WorkingDirectory 不设对会导致配置读不到、日志写失败
+WorkingDirectory=/opt/server-monitor
+
+Environment="PYTHONUNBUFFERED=1"
+# 从 /opt/server-monitor/.env 读取，不设则配置文件与凭据都不会加载
+EnvironmentFile=/opt/server-monitor/.env
+
+# 生产环境必须启用 secure Cookie（配合 nginx 的 HTTPS）
+Environment="COOKIE_SECURE=true"
+Environment="ALLOWED_HOSTS=monitor.example.com"
+
+ExecStart=/opt/server-monitor/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips='127.0.0.1'
+
+# 优雅停机：等待进行中的请求完成，避免告警邮件发一半被切断
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=5
+
+# ---------- 安全加固 ----------
+# 服务只需读代码、写日志
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/server-monitor/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# 资源上限：心跳并发 50，样本批量写入，留出余量
+LimitNOFILE=65535
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-monitor
+
+[Install]
+WantedBy=multi-user.target
+
+# ---------- 安装说明 ----------
+# 1. 创建专用用户（系统账号，不可登录）
+#    sudo useradd -r -s /usr/sbin/nologin servermon
+#
+# 2. 部署代码
+#    sudo mkdir -p /opt/server-monitor
+#    sudo rsync -a --exclude '.git' --exclude 'logs' \
+#        ./ /opt/server-monitor/
+#    sudo mkdir -p /opt/server-monitor/logs
+#    sudo chown -R servermon:servermon /opt/server-monitor
+#
+# 3. 创建虚拟环境
+#    sudo -u servermon python3 -m venv /opt/server-monitor/.venv
+#    sudo -u servermon /opt/server-monitor/.venv/bin/pip install -r \
+#        /opt/server-monitor/requirements.txt
+#
+# 4. 准备配置（密码、SMTP 授权码等）
+#    sudo cp /opt/server-monitor/.env.example /opt/server-monitor/.env
+#    sudo chmod 600 /opt/server-monitor/.env   # 必须仅属主可读
+#    sudo -u servermon vim /opt/server-monitor/.env
+#
+# 5. 首次建库建表
+#    sudo -u servermon bash -c \
+#        'cd /opt/server-monitor && .venv/bin/python scripts/bootstrap_database.py'
+#
+# 6. 启用服务
+#    sudo cp deploy/server-monitor.service /etc/systemd/system/
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable --now server-monitor
+#
+# 7. 查看状态
+#    systemctl status server-monitor
+#    journalctl -u server-monitor -f
+#
+# ---------- 备选：Docker 部署 ----------
+# 若不想管理 Python 虚拟环境与用户，用 Docker 更省事：
+#    cp .env.example .env && vim .env     # 填 MYSQL_PASSWORD 等
+#    docker compose up -d
+#    docker compose exec app python scripts/bootstrap_database.py
+#
+# 注意：Docker 场景下不要启用本 unit，两者会抢占 8080 端口。

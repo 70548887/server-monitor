@@ -1,0 +1,95 @@
+# 服务器监控面板 - 依赖锁定
+#
+# 用途：可复现的部署环境。
+#     pip install -r requirements.lock
+#
+# 与 requirements.txt 的分工：
+#   requirements.txt  —— 版本下限，声明"需要什么"，便于本地开发
+#   requirements.lock —— 精确版本，声明"用哪个"，CI 与生产部署使用
+#
+# 本文件由当前验证通过的���境导出，非手工编写：
+#   pip freeze | grep -iE "^(fastapi|httpx|...)=" > requirements.lock
+#
+# 升级依赖的流程：
+#   1. pip install <包名>          # 装新版本
+#   2. python -m pytest            # 必须全绿
+#   3. 重新生成本文件
+#   4. 提交时说明升级了什么、为何
+#
+# 注意：此处只锁"直接依赖 + 传递依赖"的当前已验证组合。
+#       若需跨 Python 版本复现，改用 pip-tools 从 pyproject 生成。
+
+# ---------- Web 框架 ----------
+fastapi==0.139.0
+starlette==1.3.1
+uvicorn==0.50.0
+python-multipart==0.0.32
+
+# ---------- HTTP 客户端 ----------
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+
+# ---------- 调度 ----------
+APScheduler==3.11.3
+
+# ---------- 数据库 ----------
+SQLAlchemy==2.0.51
+greenlet==3.5.3
+PyMySQL==1.2.0
+aiomysql==0.3.2
+
+# ---------- Redis ----------
+redis==8.0.1
+
+# ---------- 监控 ----------
+prometheus-client==0.25.0
+
+# ---------- 日志 ----------
+structlog==26.1.0
+python-json-logger==4.2.0
+
+# ---------- 配置 ----------
+PyYAML==6.0.3
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+annotated-types==0.7.0
+
+# ---------- 模板 ----------
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+
+# ---------- 认证 ----------
+passlib==1.7.4
+bcrypt==5.0.0
+python-jose==3.5.0
+cryptography==48.0.1
+ecdsa==0.19.2
+rsa==4.9.1
+pyasn1==0.6.4
+
+# ---------- 邮件 ----------
+aiosmtplib==5.1.3
+
+# ---------- 其他 ----------
+certifi==2026.2.25
+pillow==12.3.0
+email-validator==2.3.0
+dnspython==2.8.0
+idna==3.11
+anyio==4.14.1
+click==8.4.2
+
+# ---------- 测试（生产镜像不装，见 .dockerignore）----------
+pytest==9.1.1
+pytest-asyncio==1.4.0
+iniconfig==2.3.0
+pluggy==1.6.0
+colorama==0.4.6
+
+# ---------- uvicorn[standard] 附加依赖 ----------
+# 若不需要高性能 UVLSocket，可移除 standard 改用纯 h11
+httptools==0.8.0
+watchfiles==1.2.0
+websockets==13.1

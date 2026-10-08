@@ -27,6 +27,8 @@ open http://localhost:8080
 
 ```bash
 # 1. 安装依赖
+#    requirements.txt 声明版本下限，便于跟进上游
+#    requirements.lock 锁定精确版本，生产与 CI 用它
 pip install -r requirements.txt
 #    注意：email-validator 是 notifications 路由的硬依赖，缺它应用无法导入
 
@@ -34,7 +36,7 @@ pip install -r requirements.txt
 cp .env.example .env
 #    至少填写 ADMIN_PASSWORD 与 MySQL 凭据
 
-# 3. 建库建表（含 Phase 2 事件表与补列，幂等可重复执行）
+# 3. 建库建表（含事件表与补列，幂等可重复执行）
 python scripts/bootstrap_database.py
 
 # 4. 启动
@@ -44,6 +46,24 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 访问 `http://localhost:8080`，用 `.env` 中的管理员账号登录。
 
 启动后会自动创建默认管理员与通知渠道（凭据取自 `.env`）。
+
+### 传统部署（systemd + nginx）
+
+不使用 Docker 时的部署方式，配置文件在 `deploy/`：
+
+```bash
+# systemd 托管（安装步骤见 deploy/server-monitor.service 末尾注释）
+sudo cp deploy/server-monitor.service /etc/systemd/system/
+sudo systemctl enable --now server-monitor
+
+# nginx 反代：TLS 终止 + 静态资源直出
+sudo cp deploy/nginx.conf /etc/nginx/conf.d/server-monitor.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`systemd` 与 nginx 配置里已标注关键项：`WorkingDirectory` 必须正确
+（应用用相对路径定位配置与日志）、生产需 `COOKIE_SECURE=true`、
+`/metrics` 应限制为内网访问。
 
 > 数据库不可用时应用会降级为内存模式运行（数据不持久化），
 > 便于在没有 MySQL 的环境下先跑起来看界面。但此时**无法登录**

@@ -18,10 +18,12 @@
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
-COPY requirements.txt .
 
-# 用 wheel 缓存层，依赖变动时才重建
-RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+# 生产镜像用锁文件（精确版本）保证可复现。
+# 若要跟进上游新版本，改 requirements.txt 后重新生成 lock。
+COPY requirements.lock .
+
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.lock
 
 
 # ---------- 运行阶段 ----------
@@ -41,7 +43,7 @@ RUN apt-get update \
 
 # 安装编译依赖（部分包需要），装完即删
 COPY --from=builder /wheels /wheels
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.lock /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm -rf /wheels /tmp/requirements.txt
 
@@ -55,7 +57,8 @@ COPY --chown=monitor:monitor app/ ./app/
 COPY --chown=monitor:monitor configs/ ./configs/
 COPY --chown=monitor:monitor scripts/ ./scripts/
 COPY --chown=monitor:monitor pytest.ini ./
-COPY --chown=monitor:monitor requirements.txt ./
+# 装的是 requirements.lock；requirements.txt 一并带上便于排查依赖来源
+COPY --chown=monitor:monitor requirements.lock requirements.txt ./
 
 # 日志目录需可写
 RUN mkdir -p /app/logs && chown -R monitor:monitor /app
