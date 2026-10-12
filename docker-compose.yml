@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: server-monitor:1.0.0
+    image: server-monitor:1.0.1
     container_name: server-monitor
     restart: unless-stopped
     ports:

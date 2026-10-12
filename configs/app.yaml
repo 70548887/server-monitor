@@ -3,7 +3,7 @@
 # 应用信息
 app:
   name: "server-monitor"
-  version: "1.0.0"
+  version: "1.0.1"
   debug: false
 
 # 数据库配置

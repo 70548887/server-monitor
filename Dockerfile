@@ -1,17 +1,17 @@
 # 服务器监控面板 - 生产镜像
 #
 # 构建：
-#   docker build -t server-monitor:1.0.0 .
+#   docker build -t server-monitor:1.0.1 .
 #
 # 运行（需先确保 MySQL / Redis 可达）：
 #   docker run -d --name server-monitor \
 #     -p 8080:8080 \
 #     --env-file .env \
 #     -v server-monitor-logs:/app/logs \
-#     server-monitor:1.0.0
+#     server-monitor:1.0.1
 #
 # 首次启动前需建库建表（在能访问 MySQL 的环境下执行一次）：
-#   docker run --rm --env-file .env server-monitor:1.0.0 \
+#   docker run --rm --env-file .env server-monitor:1.0.1 \
 #     python scripts/bootstrap_database.py
 
 # ---------- 构建阶段 ----------

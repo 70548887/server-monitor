@@ -5,6 +5,12 @@
 
 ## [未发布]
 
+暂无变更。
+
+## [1.0.1] - 2026-10-12
+
+告警与数据一致性修复版，包含本次完整审计修复。
+
 ### 修复
 
 - 事件时间统一按UTC比较；恢复时关闭事件不再受内存重启状态或通知抑制影响。
@@ -111,6 +117,7 @@
 
 仅用于追溯起点。
 
-[未发布]: https://github.com/70548887/server-monitor/compare/v1.0.0...master
+[未发布]: https://github.com/70548887/server-monitor/compare/v1.0.1...master
+[1.0.1]: https://github.com/70548887/server-monitor/releases/tag/v1.0.1
 [1.0.0]: https://github.com/70548887/server-monitor/tree/v1.0.0
 [0.1.0-pre]: https://github.com/70548887/server-monitor/tree/v0.1.0-pre
