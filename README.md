@@ -4,6 +4,8 @@
 
 当前版本：**v1.0.0**
 
+代码仓库：[70548887/server-monitor](https://github.com/70548887/server-monitor)
+
 ## 快速开始
 
 ### Docker Compose（推荐）

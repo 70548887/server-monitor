@@ -24,7 +24,7 @@
 ### 已知限制
 
 - 单进程部署；旧版本缺失事件ID的通知记录不做不可靠的时间猜配。
-- GitHub远程仓库尚未配置，CI文件存在但远端执行状态未验证。
+- GitHub仓库：`70548887/server-monitor`，推送与拉取请求自动运行CI。
 - Docker/systemd运行验收需要相应环境；本地Windows验收与代码检查不能替代它。
 
 ---
@@ -111,6 +111,6 @@
 
 仅用于追溯起点。
 
-[未发布]: https://github.com/your-org/server-monitor/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/your-org/server-monitor/releases/tag/v1.0.0
-[0.1.0-pre]: https://github.com/your-org/server-monitor/compare/d0f00c2...v1.0.0
+[未发布]: https://github.com/70548887/server-monitor/compare/v1.0.0...master
+[1.0.0]: https://github.com/70548887/server-monitor/tree/v1.0.0
+[0.1.0-pre]: https://github.com/70548887/server-monitor/tree/v0.1.0-pre
