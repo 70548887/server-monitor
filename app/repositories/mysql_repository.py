@@ -40,6 +40,35 @@ from ..utils.timeutil import utcnow
 logger = logging.getLogger(__name__)
 
 
+def _percentile(values: List[float], q: float) -> Optional[float]:
+    """
+    计算分位数（线性插值法）
+
+    与 NumPy 默认的 linear 插值一致，也是 MySQL 8 的
+    PERCENT_RANK_CONT 所采用的口径，便于日后切换实现时数值可比对。
+
+    Args:
+        values: 样本（内部自行排序，无需调用方预排序）
+        q: 分位，取值 0~1
+
+    Returns:
+        分位值；样本为空时返回 None
+    """
+    n = len(values)
+    if n == 0:
+        return None
+
+    sorted_values = sorted(values)
+    if n == 1:
+        return round(sorted_values[0], 2)
+
+    pos = (n - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, n - 1)
+    frac = pos - lo
+    return round(sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac, 2)
+
+
 class MySQLRepository:
     """
     异步 MySQL 持久化仓库（支持自动重连）
@@ -296,11 +325,44 @@ class MySQLRepository:
         try:
             async with self._get_session_manager() as session:
                 # SQL 侧按节点 + 窗口分组聚合
-                # 注意：用 UNIX_TIMESTAMP 的整除来做窗口对齐，
-                # 比字符串处理时间更可靠，也能命中 timestamp 索引。
-                bucket = func.floor(
-                    func.unix_timestamp(SampleModel.timestamp) / window_seconds
+                #
+                # 窗口对齐必须绕开 UNIX_TIMESTAMP：它按**会话时区**解释
+                # 无时区列，而 samples.timestamp 存的是 UTC。实测本地
+                # UTC+8 时，UNIX_TIMESTAMP(timestamp) 比真实 epoch 大
+                # 8 小时，导致所有 window_start 整体偏移。
+                #
+                # 改用 TIMESTAMPDIFF(SECOND, '1970-01-01', ts)：
+                # 纯日期算术，不经任何时区换算。
+                epoch = func.timestampdiff(
+                    text("SECOND"), text("'1970-01-01'"), SampleModel.timestamp
                 )
+                bucket = func.floor(epoch / window_seconds)
+
+                # 分位数需要样本级数据。MySQL 5.7 没有窗口函数
+                # （PERCENT_RANK 需 8.0+），而当前单次聚合的样本量很小
+                # （14 节点 × 3 小时约 2300 条，单窗口单节点仅 5 条），
+                # 因此把每个窗口的延迟数组取回，在 Python 侧排序求分位。
+                # 实测数据量下开销可忽略；换 8.0+ 后可改用窗口函数下沉到 SQL。
+                latency_stmt = (
+                    select(
+                        SampleModel.node_name.label("node_name"),
+                        bucket.label("bucket"),
+                        SampleModel.latency_ms.label("latency_ms"),
+                    )
+                    .where(
+                        and_(
+                            SampleModel.timestamp >= start_time,
+                            SampleModel.timestamp < end_time,
+                        )
+                    )
+                )
+                latency_rows = (await session.execute(latency_stmt)).all()
+
+                # (node_name, bucket) -> [latency, ...]
+                latency_groups: dict[tuple, list] = {}
+                for r in latency_rows:
+                    key = (r.node_name, int(r.bucket))
+                    latency_groups.setdefault(key, []).append(float(r.latency_ms))
 
                 stmt = (
                     select(
@@ -357,6 +419,11 @@ class MySQLRepository:
                     success = int(r.success_count or 0)
                     total_samples += total
 
+                    # 该窗口的延迟样本。_percentile 内部会自行排序，
+                    # 这里不再预排序（窗口内样本数很少，多排一次可忽略，
+                    # 但保持单一排序入口更不易出错）
+                    lat = latency_groups.get((r.node_name, int(r.bucket)), [])
+
                     session.add(AggregateModel(
                         node_name=r.node_name,
                         window_start=window_start,
@@ -369,8 +436,9 @@ class MySQLRepository:
                         latency_min_ms=r.latency_min,
                         latency_max_ms=r.latency_max,
                         latency_avg_ms=round(r.latency_avg, 2) if r.latency_avg else None,
-                        # 窗口内的可用性比例；p50/p95/p99 需要样本级数据，
-                        # 这里不做近似，避免给出看起来精确却无依据的数字
+                        latency_p50_ms=_percentile(lat, 0.50),
+                        latency_p95_ms=_percentile(lat, 0.95),
+                        latency_p99_ms=_percentile(lat, 0.99),
                         availability=round(success / total, 4) if total else 1.0,
                     ))
 

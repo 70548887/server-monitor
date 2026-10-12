@@ -112,29 +112,50 @@ class TestRollupBehavior:
 
         # bucket 值：同一节点的两个不同窗口 + 另一节点的一个窗口
         rows = [
-            FakeAggRow(node_name="n1", bucket=1000, total_count=5,
-                       success_count=5, latency_min=10.0, latency_max=20.0,
+            FakeAggRow(node_name="n1", bucket=1000, total_count=3,
+                       success_count=3, latency_min=10.0, latency_max=20.0,
                        latency_avg=15.0),
-            FakeAggRow(node_name="n1", bucket=1001, total_count=5,
-                       success_count=4, latency_min=10.0, latency_max=30.0,
+            FakeAggRow(node_name="n1", bucket=1001, total_count=3,
+                       success_count=2, latency_min=10.0, latency_max=30.0,
                        latency_avg=18.0),
-            FakeAggRow(node_name="n2", bucket=1000, total_count=5,
+            FakeAggRow(node_name="n2", bucket=1000, total_count=2,
                        success_count=0, latency_min=0.0, latency_max=0.0,
                        latency_avg=0.0),
         ]
 
+        # rollup 现在会发两条查询：延迟样本 + 聚合计数。
+        # 延迟查询按 (node, bucket) 提供样本级数据。
+        latency_rows = [
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=10.0),
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=15.0),
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=20.0),
+            FakeAggRow(node_name="n1", bucket=1001, latency_ms=10.0),
+            FakeAggRow(node_name="n1", bucket=1001, latency_ms=25.0),
+            FakeAggRow(node_name="n1", bucket=1001, latency_ms=30.0),
+            FakeAggRow(node_name="n2", bucket=1000, latency_ms=0.0),
+            FakeAggRow(node_name="n2", bucket=1000, latency_ms=0.0),
+        ]
+
         added = []
 
-        class Result:
+        class AggResult:
             def all(self):
                 return rows
+
+        class LatencyResult:
+            def all(self):
+                return latency_rows
 
         class FakeSession:
             def add(self, obj):
                 added.append(obj)
 
             async def execute(self, stmt):
-                return Result()
+                # 聚合查询含 avg/latency_min，延迟查询只取 latency_ms
+                sql = str(stmt).lower()
+                if "avg(" in sql or "min(" in sql:
+                    return AggResult()
+                return LatencyResult()
 
             async def commit(self):
                 pass
@@ -150,26 +171,39 @@ class TestRollupBehavior:
 
         assert result["windows"] == 3
         assert len(added) == 3
-        assert result["samples"] == 15
+        # total_count 来自聚合计数查询：3 + 3 + 2
+        assert result["samples"] == 8
 
     async def test_success_count_and_rate(self, monkeypatch):
         """成功数、失败数、错误率计算正确"""
         repo = MySQLRepository(use_retry=False)
-        rows = [FakeAggRow(node_name="n1", bucket=1000, total_count=10,
-                           success_count=8, latency_min=1.0, latency_max=9.0,
+        rows = [FakeAggRow(node_name="n1", bucket=1000, total_count=3,
+                           success_count=2, latency_min=1.0, latency_max=9.0,
                            latency_avg=5.0)]
+        latency_rows = [
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=1.0),
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=5.0),
+            FakeAggRow(node_name="n1", bucket=1000, latency_ms=9.0),
+        ]
         added = []
 
-        class Result:
+        class AggResult:
             def all(self):
                 return rows
+
+        class LatencyResult:
+            def all(self):
+                return latency_rows
 
         class FakeSession:
             def add(self, obj):
                 added.append(obj)
 
             async def execute(self, stmt):
-                return Result()
+                sql = str(stmt).lower()
+                if "avg(" in sql or "min(" in sql:
+                    return AggResult()
+                return LatencyResult()
 
             async def commit(self):
                 pass
@@ -184,11 +218,19 @@ class TestRollupBehavior:
         await repo.rollup_samples_to_aggregates()
 
         row = added[0]
-        assert row.total_count == 10
-        assert row.success_count == 8
-        assert row.error_count == 2
-        assert row.error_rate == 0.2
-        assert row.availability == 0.8
+        assert row.total_count == 3
+        assert row.success_count == 2
+        assert row.error_count == 1
+        assert row.error_rate == round(1 / 3, 4)
+        assert row.availability == round(2 / 3, 4)
+        # 分位数此时也应写入。
+        # 样本 [1, 5, 9]：
+        #   p50: pos=(3-1)*0.5=1.0   -> vals[1]=5.0
+        #   p95: pos=(3-1)*0.95=1.9  -> 5*0.1 + 9*0.9 = 8.6
+        #   p99: pos=(3-1)*0.99=1.98 -> 5*0.02 + 9*0.98 = 8.92
+        assert row.latency_p50_ms == 5.0
+        assert row.latency_p95_ms == 8.6
+        assert row.latency_p99_ms == 8.92
 
     async def test_existing_windows_deleted_first(self, monkeypatch):
         """重跑同一窗口是幂等的：先删后写"""
@@ -196,11 +238,16 @@ class TestRollupBehavior:
         rows = [FakeAggRow(node_name="n1", bucket=1000, total_count=1,
                            success_count=1, latency_min=1.0, latency_max=1.0,
                            latency_avg=1.0)]
+        latency_rows = [FakeAggRow(node_name="n1", bucket=1000, latency_ms=1.0)]
         executed = []
 
-        class Result:
+        class AggResult:
             def all(self):
                 return rows
+
+        class LatencyResult:
+            def all(self):
+                return latency_rows
 
         class FakeSession:
             def add(self, obj):
@@ -208,7 +255,10 @@ class TestRollupBehavior:
 
             async def execute(self, stmt):
                 executed.append(stmt)
-                return Result()
+                sql = str(stmt).lower()
+                if "avg(" in sql or "min(" in sql:
+                    return AggResult()
+                return LatencyResult()
 
             async def commit(self):
                 pass
