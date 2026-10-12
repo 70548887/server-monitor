@@ -36,7 +36,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from datetime import datetime, date, time, timedelta
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Callable, Awaitable
+from html import escape
 
 # 尝试导入 certifi 获取 CA 证书路径
 try:
@@ -144,7 +145,7 @@ class EmailNotificationService:
             <div class="alert-box">
                 <div class="alert-title">服务器监控告警</div>
                 <div class="alert-content">
-                    {body.replace(chr(10), '<br>')}
+                    {escape(body).replace(chr(10), '<br>')}
                 </div>
             </div>
             <div class="footer">
@@ -398,6 +399,7 @@ class WebhookNotificationService:
         url: str,
         payload: dict,
         secret: Optional[str] = None,
+        can_send: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         发送 webhook 请求
@@ -435,6 +437,8 @@ class WebhookNotificationService:
 
         last_error = None
         for attempt in range(cls.MAX_RETRIES + 1):
+            if can_send is not None and not await can_send():
+                return False, "事件已恢复或状态不可确认，取消离线通知"
             try:
                 async with httpx.AsyncClient(
                     timeout=cls.TIMEOUT_SECONDS, verify=verify
@@ -498,6 +502,8 @@ class NotificationLogService:
         recipients: Optional[str] = None,
         error_message: Optional[str] = None,
         send_duration_ms: Optional[float] = None,
+        incident_id: Optional[int] = None,
+        notify_seq: Optional[int] = None,
     ) -> dict:
         """
         添加发送记录
@@ -532,6 +538,8 @@ class NotificationLogService:
                     success=success,
                     error_message=error_message,
                     send_duration_ms=send_duration_ms,
+                    incident_id=incident_id,
+                    notify_seq=notify_seq,
                 )
                 session.add(log)
                 await session.flush()
@@ -1133,6 +1141,8 @@ class NotificationService:
         node_url: Optional[str] = None,
         check_limits: bool = True,
         escalated: bool = False,
+        incident_id: Optional[int] = None,
+        notify_seq: Optional[int] = None,
     ) -> tuple[bool, str]:
         """
         通过指定渠道发送通知
@@ -1173,6 +1183,8 @@ class NotificationService:
                     channel_id=channel_id,
                     channel_name=channel.get("name", ""),
                     alert_type=alert_type,
+                    incident_id=incident_id,
+                    notify_seq=notify_seq,
                     success=False,
                     node_name=node_name,
                     node_url=node_url,
@@ -1183,6 +1195,13 @@ class NotificationService:
         
         channel_type = channel.get("channel_type")
         recipients_str = ""
+
+        async def incident_still_open():
+            if alert_type != "node_down" or incident_id is None:
+                return True
+            from .incident import IncidentService
+            current = await IncidentService.get_open_incident(node_name, "node_down")
+            return current is not None and current["id"] == incident_id
         
         if channel_type == "email":
             # 邮箱通知
@@ -1210,6 +1229,9 @@ class NotificationService:
                     return False, error_msg
                 logger.info(f"正常告警通知将发送至 {len(recipients)} 个启用的通知人员")
             
+            # 渠道查询/限流/收件人读取可能耗时，真正发送前重新核对事件。
+            if not await incident_still_open():
+                return False, "事件已恢复或状态不可确认，取消离线通知"
             success, error = await EmailNotificationService.send_email(
                 smtp_host=smtp_host,
                 smtp_port=smtp_port,
@@ -1232,6 +1254,8 @@ class NotificationService:
                 channel_id=channel_id,
                 channel_name=channel.get("name", ""),
                 alert_type=alert_type,
+                incident_id=incident_id,
+                notify_seq=notify_seq,
                 success=success,
                 node_name=node_name,
                 node_url=node_url,
@@ -1266,6 +1290,7 @@ class NotificationService:
                 url=webhook_url,
                 payload=payload,
                 secret=webhook_secret,
+                can_send=incident_still_open,
             )
 
             send_duration_ms = (time_module.time() - start_time) * 1000
@@ -1276,6 +1301,8 @@ class NotificationService:
                 channel_id=channel_id,
                 channel_name=channel.get("name", ""),
                 alert_type=alert_type,
+                incident_id=incident_id,
+                notify_seq=notify_seq,
                 success=success,
                 node_name=node_name,
                 node_url=node_url,

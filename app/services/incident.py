@@ -12,7 +12,7 @@
 
 阶梯提醒：
     reminder_intervals = [0, 60, 240, 480, 720] 表示距事件开始
-    0min / 1h / 5h / 13h / 25h 各提醒一次，之后每 12 小时循环。
+    0min / 1h / 4h / 8h / 12h 各提醒一次，之后每 12 小时循环。
     早期密集（确认有人看见），后期稀疏（不再刷屏）。
 """
 
@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..models.base import get_session_context
 from ..models.notification_channel import AlertIncidentModel
+from ..utils.timeutil import utcnow, to_utc_naive, format_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,8 @@ class IncidentService:
             except ValueError:
                 return True, "unparsable gate, allowing"
 
+        now = to_utc_naive(now)
+        next_notify_at = to_utc_naive(next_notify_at)
         if now < next_notify_at:
             remaining = (next_notify_at - now).total_seconds()
             return False, f"闸门未到，还需 {int(remaining)} 秒"
@@ -217,7 +220,7 @@ class IncidentService:
                     return None
 
                 incident.notify_count = (incident.notify_count or 0) + 1
-                sent_at = now or datetime.now()
+                sent_at = to_utc_naive(now) if now is not None else utcnow()
                 incident.last_notified_at = sent_at
                 incident.next_notify_at = compute_next_notify_at(
                     started_at=incident.started_at,
@@ -337,7 +340,17 @@ class IncidentService:
                 )
                 result = await session.execute(stmt)
                 count = result.scalar() or 0
-                return count > 0
+                if count > 0:
+                    return True
+                # 兼容旧版发送日志漏写事件ID、以及发送日志已过留存期的情况。
+                # 告警记录的成功状态只在渠道实际成功后更新，不能用尝试次数代替。
+                from ..models.notification_channel import AlertLogModel
+                legacy = await session.execute(select(func.count(AlertLogModel.id)).where(
+                    AlertLogModel.incident_id == incident_id,
+                    AlertLogModel.alert_type == "node_down",
+                    AlertLogModel.notification_sent == True,
+                ))
+                return (legacy.scalar() or 0) > 0
         except Exception as e:
             logger.warning(
                 f"Failed to check delivered alerts for incident {incident_id}: {e}"
@@ -362,7 +375,7 @@ class IncidentService:
                     logger.warning(f"Incident not found when resolving: {incident_id}")
                     return None
 
-                resolved_at = resolved_at or datetime.now()
+                resolved_at = to_utc_naive(resolved_at) if resolved_at is not None else utcnow()
                 snapshot = incident.to_dict()
 
                 incident.status = "resolved"
@@ -378,7 +391,7 @@ class IncidentService:
                 await session.refresh(incident)
 
                 snapshot["status"] = "resolved"
-                snapshot["resolved_at"] = incident.resolved_at.isoformat()
+                snapshot["resolved_at"] = format_iso_utc(incident.resolved_at)
                 snapshot["duration_seconds"] = incident.duration_seconds
 
                 logger.info(

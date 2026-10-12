@@ -15,7 +15,7 @@ from .config import get_config, AlertingConfig
 from .heartbeat import HeartbeatResult
 from ..models.base import get_session_context
 from ..models.notification_channel import AlertLogModel
-from ..utils.timeutil import to_local_time, utcnow
+from ..utils.timeutil import to_local_time, to_utc_naive, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -237,18 +237,15 @@ class AlertingService:
             state.latencies.append(result.latency_ms)
 
             if result.success:
-                # 检查是否需要触发恢复告警
-                if not previous_success and previous_failures >= self._config.consecutive_failures:
-                    # 节点从失败恢复：重置类告警仍受抑制控制，避免抖动刷屏。
-                    # 真正的恢复通知由事件闸门负责发出并关闭事件。
-                    if not self._is_suppressed_combined(state, "node_recovery", redis_suppressed):
-                        recovery_intent = {
-                            "previous_failures": previous_failures,
-                            "latency_ms": round(result.latency_ms, 2),
-                            "status_code": result.status_code,
-                        }
-                        self._mark_alert_triggered(state, "node_recovery")
-                        suppression_writes.append(("node_recovery", False))
+                # 每次成功都核对持久化事件；内存状态会在重启后丢失。
+                # 通知抑制只决定是否发信，不得阻止事件关闭。
+                recovery_intent = {
+                    "previous_failures": previous_failures,
+                    "latency_ms": round(result.latency_ms, 2),
+                    "status_code": result.status_code,
+                    "transition": not previous_success and previous_failures >= self._config.consecutive_failures,
+                    "suppressed": self._is_suppressed_combined(state, "node_recovery", redis_suppressed),
+                }
 
                 # 重置失败计数
                 state.consecutive_failures = 0
@@ -413,6 +410,9 @@ class AlertingService:
                 failure_delta=1,
                 now=now,
             )
+            if updated is None:
+                logger.error("事件闸门推进失败，取消本轮通知: incident=%s", incident["id"])
+                return events
 
             event = self._build_down_event(result, down_intent, incident, seq)
             if updated:
@@ -428,34 +428,26 @@ class AlertingService:
         # ---------- 节点恢复 ----------
         if recovery_intent:
             incident = await IncidentService.get_open_incident(node_name, "node_down")
-
-            if incident is None:
-                # 没有对应的事件（例如进程重启后事件丢失）
-                # 无从判断此前是否送达过，保持发送以免漏掉恢复信号
-                events.append(self._build_recovery_event(result, recovery_intent, None))
-            else:
-                # 只有此前**确实送达**过离线通知，才发恢复通知。
-                # 否则用户会收到一条莫名其妙的"已恢复"——他从未收到过离线告警。
+            snapshot = None
+            delivered = None
+            if incident is not None:
                 delivered = await IncidentService.has_delivered_down_alert(incident["id"])
+                snapshot = await IncidentService.resolve_incident(incident["id"], resolved_at=now)
+                if snapshot is None:
+                    # 关闭失败，下次成功心跳继续核对，避免先发恢复信再重复关闭。
+                    return events
 
-                if delivered is False:
-                    # 一条都没送达过：静默关闭事件，不发恢复通知
-                    await IncidentService.resolve_incident(incident["id"])
-                    logger.info(
-                        f"Recovery notification skipped: node={node_name}, "
-                        f"incident={incident['id']}（此前无离线通知送达，"
-                        f"发恢复通知会造成困惑）"
-                    )
-                else:
-                    snapshot = await IncidentService.resolve_incident(incident["id"])
-                    events.append(
-                        self._build_recovery_event(result, recovery_intent, snapshot)
-                    )
-                    logger.info(
-                        f"Alert triggered: node_recovery for {node_name} "
-                        f"(incident={incident['id']}, "
-                        f"duration={snapshot.get('duration_seconds') if snapshot else None}s)"
-                    )
+            should_send = (
+                (incident is not None or recovery_intent.get("transition", False))
+                and not recovery_intent.get("suppressed", False)
+                and delivered is not False
+                and self._config.notify_on_recovery
+            )
+            if should_send:
+                events.append(self._build_recovery_event(result, recovery_intent, snapshot))
+                with self._lock:
+                    self._mark_alert_triggered(self._get_or_create_state(node_name), "node_recovery")
+                await self._persist_suppression(node_name, "node_recovery")
 
             # 事件结束，清除 node_down / latency 抑制，避免影响下一次故障。
             # 保留 node_recovery 的抑制：否则抖动节点每次上下线都会发恢复通知。
@@ -622,6 +614,12 @@ class AlertingService:
         """构造节点离线告警事件"""
         node_name = result.node_name
         failures = intent.get("consecutive_failures", 0)
+        duration_s = None
+        if incident and incident.get("started_at"):
+            started = incident["started_at"]
+            if isinstance(started, str):
+                started = datetime.fromisoformat(started)
+            duration_s = max(0, int((to_utc_naive(result.timestamp) - to_utc_naive(started)).total_seconds()))
 
         if seq and seq > 1:
             # 重复提醒：正文体现增量信息，而不是复制第一封
@@ -647,6 +645,7 @@ class AlertingService:
             },
             incident_id=incident.get("id") if incident else None,
             notify_seq=seq,
+            incident_duration_s=duration_s,
         )
 
     def _build_recovery_event(
@@ -704,7 +703,8 @@ class AlertingService:
                 started_at = datetime.fromisoformat(started_at)
             except ValueError:
                 return "未知"
-        now = now or datetime.now()
+        now = to_utc_naive(now) if now is not None else utcnow()
+        started_at = to_utc_naive(started_at)
         return AlertingService._format_duration_seconds(
             int((now - started_at).total_seconds())
         )
@@ -726,8 +726,11 @@ class AlertingService:
         """
         all_events = []
         for result in results:
-            events = await self.evaluate(result)
-            all_events.extend(events)
+            try:
+                events = await self.evaluate(result)
+                all_events.extend(events)
+            except Exception:
+                logger.exception("告警评估失败: node=%s", result.node_name)
         return all_events
     
     def get_node_state(self, node_name: str) -> Optional[dict]:
@@ -1156,6 +1159,8 @@ async def process_alerts(events: list[AlertEvent]):
                         node_name=event.node_name,
                         node_url=event.node_url,
                         escalated=escalated,
+                        incident_id=event.incident_id,
+                        notify_seq=event.notify_seq,
                     )
                     
                     if success:

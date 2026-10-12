@@ -169,18 +169,18 @@ class TestPositionValidation:
         cap = await create_captcha()
         rec = await C.store.get(cap["id"])
         if pre_verify:
-            await check_captcha(cap["id"], rec["x"], None, consume=False)
+            await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=False)
         return cap["id"], rec["x"]
 
     async def test_exact_position_passes(self):
         cid, x = await self._make(pre_verify=True)
-        ok, _ = await check_captcha(cid, x, None, consume=True)
+        ok, _ = await check_captcha(cid, x, TestTrailValidation.human_trail(x), consume=True)
         assert ok is True
 
     async def test_within_tolerance_passes(self):
         cid, x = await self._make(pre_verify=True)
         ok, _ = await check_captcha(
-            cid, x + POSITION_TOLERANCE, None, consume=True
+            cid, x + POSITION_TOLERANCE, TestTrailValidation.human_trail(x), consume=True
         )
         assert ok is True
 
@@ -224,15 +224,15 @@ class TestReplayProtection:
         x = rec["x"]
 
         # 前端校验取得标记
-        first, _ = await check_captcha(cap["id"], x, None, consume=False)
+        first, _ = await check_captcha(cap["id"], x, TestTrailValidation.human_trail(x), consume=False)
         assert first is True
 
         # 登录校验
-        login_ok, _ = await check_captcha(cap["id"], x, None, consume=True)
+        login_ok, _ = await check_captcha(cap["id"], x, TestTrailValidation.human_trail(x), consume=True)
         assert login_ok is True
 
         # 重放
-        second, reason = await check_captcha(cap["id"], x, None, consume=True)
+        second, reason = await check_captcha(cap["id"], x, TestTrailValidation.human_trail(x), consume=True)
         assert second is False
         assert "过期" in reason
 
@@ -258,7 +258,7 @@ class TestReplayProtection:
         cap = await create_captcha()
         rec = await C.store.get(cap["id"])
 
-        ok, _ = await check_captcha(cap["id"], rec["x"], None, consume=False)
+        ok, _ = await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=False)
         assert ok is True
         assert await C.store.get(cap["id"]) is not None
 
@@ -312,15 +312,10 @@ class TestTrailValidation:
         assert validate_trail([[0], [1, 2]], 200) is False
         assert validate_trail("not-a-trail", 200) is False
 
-    def test_absent_trail_allowed(self):
-        """
-        未上报轨迹时放行
-
-        保证旧前端仍能登录；但一旦上报就必须合法 ——
-        上报了假轨迹比不上报更可疑。
-        """
-        assert validate_trail(None, 200) is True
-        assert validate_trail([], 200) is True
+    def test_absent_trail_rejected(self):
+        """轨迹是必填验证数据。"""
+        assert validate_trail(None, 200) is False
+        assert validate_trail([], 200) is False
 
     async def test_fake_trail_blocks_login(self):
         """端到端：脚本用等速轨迹应被拦截"""
@@ -346,6 +341,40 @@ class TestConstants:
         assert 100 <= MEMORY_MAX_ENTRIES <= 100_000
 
 
+class TestAuditCaptchaRegressions:
+    async def test_failed_preview_consumes_challenge(self):
+        cap = await create_captcha()
+        record = await C.store.get(cap["id"])
+        trail = TestTrailValidation.human_trail(record["x"])
+        assert (await check_captcha(cap["id"], 0, trail))[0] is False
+        assert (await check_captcha(cap["id"], record["x"], trail))[0] is False
+
+    async def test_empty_trail_cannot_verify(self):
+        cap = await create_captcha()
+        record = await C.store.get(cap["id"])
+        assert (await check_captcha(cap["id"], record["x"], None))[0] is False
+
+    async def test_concurrent_consumers_only_one_succeeds(self):
+        import asyncio
+        cap = await create_captcha()
+        record = await C.store.get(cap["id"])
+        trail = TestTrailValidation.human_trail(record["x"])
+        assert (await check_captcha(cap["id"], record["x"], trail))[0]
+        outcomes = await asyncio.gather(*(check_captcha(cap["id"], record["x"], trail, consume=True) for _ in range(2)))
+        assert sum(ok for ok, _ in outcomes) == 1
+
+    def test_middle_of_trail_is_signed(self):
+        original = [[0, 0], [50, 100], [200, 400]]
+        altered = [[0, 0], [99, 100], [200, 400]]
+        assert C._trail_signature(original) != C._trail_signature(altered)
+
+    def test_nonfinite_and_wrong_endpoint_rejected(self):
+        trail = TestTrailValidation.human_trail(200)
+        assert not validate_trail(trail, 100)
+        trail[5][0] = float("nan")
+        assert not validate_trail(trail, 200)
+
+
 class TestVerifiedMarker:
     """
     通过标记
@@ -361,7 +390,7 @@ class TestVerifiedMarker:
         rec = await C.store.get(cap["id"])
 
         ok, reason = await check_captcha(
-            cap["id"], rec["x"], None, consume=True
+            cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=True
         )
         assert ok is False
         assert "人机验证" in reason
@@ -371,7 +400,7 @@ class TestVerifiedMarker:
         cap = await create_captcha()
         rec = await C.store.get(cap["id"])
 
-        ok, _ = await check_captcha(cap["id"], rec["x"], None, consume=False)
+        ok, _ = await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=False)
         assert ok is True
 
         marked = await C.store.get(cap["id"])
@@ -383,9 +412,9 @@ class TestVerifiedMarker:
         cap = await create_captcha()
         rec = await C.store.get(cap["id"])
 
-        await check_captcha(cap["id"], rec["x"], None, consume=False)
+        await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=False)
         ok, _ = await check_captcha(
-            cap["id"], rec["x"], None, consume=True
+            cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=True
         )
         assert ok is True
 
@@ -394,8 +423,8 @@ class TestVerifiedMarker:
         cap = await create_captcha()
         rec = await C.store.get(cap["id"])
 
-        await check_captcha(cap["id"], rec["x"], None, consume=False)
-        await check_captcha(cap["id"], rec["x"], None, consume=True)
+        await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=False)
+        await check_captcha(cap["id"], rec["x"], TestTrailValidation.human_trail(rec["x"]), consume=True)
 
         assert await C.store.get(cap["id"]) is None
 

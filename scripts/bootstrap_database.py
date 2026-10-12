@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from sqlalchemy import text
+from sqlalchemy import text, URL
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # 导入全部模型，确保 Base.metadata 注册了所有表
@@ -50,10 +50,8 @@ async def create_database_if_missing(config) -> bool:
     """
     db = config.database
     # 不指定库名，连接到服务器
-    url = (
-        f"mysql+aiomysql://{db.mysql_user}:{db.mysql_password}"
-        f"@{db.mysql_host}:{db.mysql_port}"
-    )
+    url = URL.create("mysql+aiomysql", username=db.mysql_user, password=db.mysql_password,
+                     host=db.mysql_host, port=db.mysql_port)
     engine = create_async_engine(url, connect_args={"connect_timeout": 10})
     try:
         async with engine.begin() as conn:
@@ -134,6 +132,15 @@ async def run_phase2_migration(config) -> int:
                 added += 1
             else:
                 log("  [已存在] 表 alert_incidents")
+
+            engine_name = (await conn.execute(text(
+                "SELECT ENGINE FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() AND table_name = 'alert_incidents'"
+            ))).scalar()
+            if engine_name != "InnoDB":
+                await conn.execute(text("ALTER TABLE alert_incidents ENGINE=InnoDB"))
+                log("  [修复] alert_incidents 已转为 InnoDB")
+                added += 1
 
             # 2. 补列
             for table, col, ddl in [

@@ -143,7 +143,9 @@ class SchedulerService:
                 hours=3,
             )
 
-            if result.get("windows"):
+            if result.get("error"):
+                logger.error("聚合任务失败: %s", result["error"])
+            elif result.get("windows"):
                 logger.info(
                     f"聚合完成: {result['windows']} 个窗口, "
                     f"覆盖 {result['samples']} 条样本"

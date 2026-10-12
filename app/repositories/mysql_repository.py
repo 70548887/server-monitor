@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from sqlalchemy import select, delete, update, func, and_, text, case, cast, Integer
+from sqlalchemy import select, delete, update, func, and_, text, case, cast, Integer, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -35,7 +35,7 @@ from ..models.base import (
 )
 from ..models.node import NodeModel
 from ..models.sample import SampleModel, AggregateModel
-from ..utils.timeutil import utcnow
+from ..utils.timeutil import utcnow, to_utc_naive, format_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,7 @@ def _percentile(values: List[float], q: float) -> Optional[float]:
     """
     计算分位数（线性插值法）
 
-    与 NumPy 默认的 linear 插值一致，也是 MySQL 8 的
-    PERCENT_RANK_CONT 所采用的口径，便于日后切换实现时数值可比对。
+    与 NumPy 默认的 linear 插值一致。
 
     Args:
         values: 样本（内部自行排序，无需调用方预排序）
@@ -294,6 +293,7 @@ class MySQLRepository:
         window_minutes: int = 5,
         hours: int = 6,
         lookback_minutes: Optional[int] = None,
+        end_at: Optional[datetime] = None,
     ) -> dict:
         """
         把原始样本汇总为窗口聚合快照
@@ -303,24 +303,33 @@ class MySQLRepository:
         48 小时的数据参与计算，却按 7 天/30 天展示，属于静默失真。
         聚合表按 5 分钟窗口长期保留，让长周期统计有真实数据来源。
 
-        实现上把分组与计数交给 MySQL（GROUP BY），只把每个窗口的
-        一行结果写回，避免把几十万条样本拉进 Python 内存。
+        实现上把分组与计数交给 MySQL（GROUP BY），分位数需要取回本批次样本延迟；
+        大范围补算由脚本拆成6小时批次，限制内存占用。
 
         Args:
             window_minutes: 窗口大小（分钟）
             hours: 回溯多少小时的数据参与汇总
             lookback_minutes: 直接指定回溯分钟数（优先于 hours）
+            end_at: 历史补算截止UTC时间，默认当前时间；均向下对齐完整窗口
 
         Returns:
             {"windows": 处理的窗口数, "written": 写入行数, "samples": 覆盖样本数}
         """
+        if window_minutes <= 0:
+            raise ValueError("window_minutes must be positive")
         window_seconds = window_minutes * 60
         lookback = lookback_minutes if lookback_minutes is not None else hours * 60
+        if lookback <= 0:
+            raise ValueError("lookback must be positive")
 
         # 只汇总"已经结束"的窗口，避免把当前不完整的窗口写进去后又被覆盖
         now = utcnow()
-        end_time = now - timedelta(seconds=window_seconds)
-        start_time = end_time - timedelta(minutes=lookback)
+        epoch_origin = datetime(1970, 1, 1)
+        cutoff = min(now, to_utc_naive(end_at)) if end_at is not None else now
+        end_seconds = int((cutoff - epoch_origin).total_seconds())
+        end_time = epoch_origin + timedelta(seconds=end_seconds // window_seconds * window_seconds)
+        # 两端对齐，只处理完整窗口，避免用半个窗口覆盖之前的完整统计。
+        start_time = end_time - timedelta(seconds=(lookback * 60 // window_seconds) * window_seconds)
 
         try:
             async with self._get_session_manager() as session:
@@ -328,7 +337,7 @@ class MySQLRepository:
                 #
                 # 窗口对齐必须绕开 UNIX_TIMESTAMP：它按**会话时区**解释
                 # 无时区列，而 samples.timestamp 存的是 UTC。实测本地
-                # UTC+8 时，UNIX_TIMESTAMP(timestamp) 比真实 epoch 大
+                # UTC+8 时，UNIX_TIMESTAMP(timestamp) 比真实 epoch 小
                 # 8 小时，导致所有 window_start 整体偏移。
                 #
                 # 改用 TIMESTAMPDIFF(SECOND, '1970-01-01', ts)：
@@ -395,20 +404,18 @@ class MySQLRepository:
                     return {"windows": 0, "written": 0, "samples": 0}
 
                 # 已存在的窗口先删除，保证重跑幂等
-                window_starts = [
-                    datetime.utcfromtimestamp(int(r.bucket) * window_seconds)
+                window_keys = [
+                    (r.node_name, epoch_origin + timedelta(seconds=int(r.bucket) * window_seconds))
                     for r in rows
                 ]
-                node_names = {r.node_name for r in rows}
-
-                await session.execute(
-                    delete(AggregateModel).where(
-                        and_(
-                            AggregateModel.node_name.in_(node_names),
-                            AggregateModel.window_start.in_(window_starts),
+                # 精确匹配节点、窗口开始与粒度，且分批避免绑定参数过多。
+                for offset in range(0, len(window_keys), 500):
+                    await session.execute(
+                        delete(AggregateModel).where(
+                            AggregateModel.window_minutes == window_minutes,
+                            tuple_(AggregateModel.node_name, AggregateModel.window_start).in_(window_keys[offset:offset + 500]),
                         )
                     )
-                )
 
                 total_samples = 0
                 for r in rows:
@@ -435,7 +442,7 @@ class MySQLRepository:
                         error_rate=round((total - success) / total, 4) if total else 0.0,
                         latency_min_ms=r.latency_min,
                         latency_max_ms=r.latency_max,
-                        latency_avg_ms=round(r.latency_avg, 2) if r.latency_avg else None,
+                        latency_avg_ms=round(r.latency_avg, 2) if r.latency_avg is not None else None,
                         latency_p50_ms=_percentile(lat, 0.50),
                         latency_p95_ms=_percentile(lat, 0.95),
                         latency_p99_ms=_percentile(lat, 0.99),
@@ -486,8 +493,13 @@ class MySQLRepository:
                         AggregateModel.node_name,
                         func.sum(AggregateModel.total_count).label("total"),
                         func.sum(AggregateModel.success_count).label("success"),
+                        func.min(AggregateModel.window_start).label("coverage_start"),
+                        func.max(AggregateModel.window_end).label("coverage_end"),
+                        func.count().label("window_count"),
                     )
-                    .where(AggregateModel.window_start >= cutoff)
+                    .where(AggregateModel.window_start >= cutoff,
+                           AggregateModel.window_end <= utcnow(),
+                           AggregateModel.window_minutes == 5)
                     .group_by(AggregateModel.node_name)
                 )
                 if node_name:
@@ -504,6 +516,10 @@ class MySQLRepository:
                         "uptime": round((success / total) * 100, 3) if total else None,
                         "total_checks": total,
                         "success_checks": success,
+                        "coverage_start": format_iso_utc(getattr(r, "coverage_start", None)),
+                        "coverage_end": format_iso_utc(getattr(r, "coverage_end", None)),
+                        "window_count": getattr(r, "window_count", 0),
+                        "requested_days": days,
                     }
                 return out
 
@@ -515,6 +531,26 @@ class MySQLRepository:
         except Exception as e:
             logger.error(f"读取聚合可用性异常: error={e}")
             return {}
+
+    async def get_latency_aggregates(self, node_name: str, hours: int = 24) -> list[dict]:
+        """返回每个完整5分钟窗口的分位数；不对窗口分位数再取平均。"""
+        async with self._get_session_manager() as session:
+            rows = (await session.execute(
+                select(AggregateModel).where(
+                    AggregateModel.node_name == node_name,
+                    AggregateModel.window_minutes == 5,
+                    AggregateModel.window_start >= utcnow() - timedelta(hours=hours),
+                    AggregateModel.window_end <= utcnow(),
+                ).order_by(AggregateModel.window_start)
+            )).scalars().all()
+            return [{
+                "window_start": format_iso_utc(r.window_start),
+                "window_end": format_iso_utc(r.window_end),
+                "sample_count": r.total_count,
+                "p50_ms": r.latency_p50_ms,
+                "p95_ms": r.latency_p95_ms,
+                "p99_ms": r.latency_p99_ms,
+            } for r in rows]
 
     async def cleanup_old_aggregates(self, days: int = 90) -> int:
         """清理过期聚合快照"""

@@ -39,7 +39,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/server-monitor/logs
+ReadWritePaths=/opt/server-monitor/logs /opt/server-monitor/configs
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -71,7 +71,7 @@ WantedBy=multi-user.target
 # 3. 创建虚拟环境
 #    sudo -u servermon python3 -m venv /opt/server-monitor/.venv
 #    sudo -u servermon /opt/server-monitor/.venv/bin/pip install -r \
-#        /opt/server-monitor/requirements.txt
+#        /opt/server-monitor/requirements.lock
 #
 # 4. 准备配置（密码、SMTP 授权码等）
 #    sudo cp /opt/server-monitor/.env.example /opt/server-monitor/.env

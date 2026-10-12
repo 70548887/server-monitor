@@ -1,5 +1,19 @@
 let nodeLatencyChart = null;
 
+async function loadLatencyPercentiles(nodeName) {
+    const target = document.getElementById('latencyPercentiles');
+    if (!target) return;
+    try {
+        const response = await fetch(`/api/nodes/${encodeURIComponent(nodeName)}/latency/aggregates?hours=24`);
+        if (!response.ok) throw new Error('读取失败');
+        const {data} = await response.json();
+        const last = data.at(-1);
+        if (!last) { target.textContent = '最近24小时暂无完整窗口统计'; return; }
+        const ms = value => value == null ? '暂无数据' : `${Number(value).toFixed(2)} ms`;
+        target.textContent = `最近完整5分钟窗口（${new Date(last.window_end).toLocaleString()}结束，${last.sample_count}次检测）：P50 ${ms(last.p50_ms)} · P95 ${ms(last.p95_ms)} · P99 ${ms(last.p99_ms)}`;
+    } catch (error) { target.textContent = '延迟分位数暂时不可用'; }
+}
+
 async function pingNode(nodeName) {
     const resultBox = document.getElementById('latestResult');
     if (!resultBox) return;
@@ -12,7 +26,7 @@ async function pingNode(nodeName) {
         resultBox.innerHTML = `
             <div class="result-item">
                 <label>时间</label>
-                <span>${data.timestamp}</span>
+                <span>${escapeHtml(data.timestamp)}</span>
             </div>
             <div class="result-item">
                 <label>状态码</label>
@@ -26,11 +40,11 @@ async function pingNode(nodeName) {
                 <label>成功</label>
                 <span class="badge ${data.success ? 'badge-success' : 'badge-danger'}">${data.success ? '是' : '否'}</span>
             </div>
-            ${data.error_type ? `<div class="result-item"><label>错误类型</label><span>${data.error_type}</span></div>` : ''}
-            ${data.error_message ? `<div class="result-item"><label>错误信息</label><span>${data.error_message}</span></div>` : ''}
+            ${data.error_type ? `<div class="result-item"><label>错误类型</label><span>${escapeHtml(data.error_type)}</span></div>` : ''}
+            ${data.error_message ? `<div class="result-item"><label>错误信息</label><span>${escapeHtml(data.error_message)}</span></div>` : ''}
         `;
     } catch (e) {
-        resultBox.innerHTML = `<p class="error">检测失败: ${e.message}</p>`;
+        resultBox.innerHTML = `<p class="error">检测失败: ${escapeHtml(e.message)}</p>`;
     }
 }
 
@@ -168,6 +182,6 @@ async function loadNodeLatencyChart(nodeName) {
     } catch (e) {
         console.error('Failed to load latency chart:', e);
         canvas.parentElement.innerHTML = 
-            `<p style="text-align:center;color:#f00;padding:40px;">加载图表失败: ${e.message}</p>`;
+            `<p style="text-align:center;color:#f00;padding:40px;">加载图表失败: ${escapeHtml(e.message)}</p>`;
     }
 }

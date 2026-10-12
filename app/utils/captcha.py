@@ -17,6 +17,9 @@ import io
 import random
 import time
 import uuid
+import json
+import hashlib
+import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -279,6 +282,23 @@ class CaptchaStore:
                 self._redis_available = False
         return self._memory.delete(captcha_id)
 
+    async def pop(self, captcha_id: str) -> dict | None:
+        """原子取出并销毁，避免并发登录复用同一验证凭证。"""
+        repo = await self._redis()
+        if repo is not None:
+            try:
+                client = await repo._get_client()
+                raw = await client.eval(
+                    "local v=redis.call('GET',KEYS[1]); redis.call('DEL',KEYS[1]); return v",
+                    1, self._key(captcha_id),
+                )
+                return json.loads(raw) if raw else None
+            except Exception:
+                self._redis_available = False
+        value = self._memory.get(captcha_id)
+        self._memory.delete(captcha_id)
+        return value
+
 
 # 全局存储实例
 store = CaptchaStore()
@@ -291,16 +311,15 @@ def _trail_signature(trail) -> str:
     """
     轨迹指纹
 
-    取首尾点与采样数做特征，避免存完整轨迹（内存/Redis 开销），
-    同时足以识别"换了一条轨迹"的情况。
+    对完整轨迹签名，登录提交必须与预校验完全一致。
     """
     if not isinstance(trail, list) or not trail:
         return "empty"
     try:
-        head = trail[0]
-        tail = trail[-1]
-        return f"{len(trail)}:{head[0]},{head[1]}:{tail[0]},{tail[1]}"
-    except (IndexError, TypeError):
+        if any(not isinstance(p, (list, tuple)) or len(p) != 2 for p in trail):
+            return "invalid"
+        return hashlib.sha256(json.dumps(trail, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    except (IndexError, TypeError, ValueError):
         return "invalid"
 
 
@@ -319,13 +338,12 @@ def validate_trail(trail, target_x: int) -> bool:
         target_x: 缺口横坐标
 
     Returns:
-        是否通过。轨迹缺失时不拦截（保证旧前端仍可用），
-        但一旦上报就必须合法 —— 上报了假轨迹比不上报更可疑。
+        是否通过。轨迹必填，点数、有限数值、时间与位移均需合法。
     """
     if not trail:
-        return True  # 未上报轨迹，放行
+        return False
 
-    if not isinstance(trail, list) or len(trail) < 8:
+    if not isinstance(trail, list) or not 8 <= len(trail) <= 2000:
         return False
 
     xs = []
@@ -338,6 +356,11 @@ def validate_trail(trail, target_x: int) -> bool:
             ts.append(float(point[1]))
         except (TypeError, ValueError):
             return False
+
+    if not all(math.isfinite(v) for v in xs + ts):
+        return False
+    if abs(xs[0]) > POSITION_TOLERANCE or abs(xs[-1] - target_x) > POSITION_TOLERANCE:
+        return False
 
     # 时间必须单调递增，否则是伪造的
     for i in range(1, len(ts)):
@@ -416,7 +439,8 @@ async def check_captcha(captcha_id: str, x_offset, trail=None, consume: bool = F
     if not captcha_id or x_offset is None:
         return False, "参数不完整"
 
-    record = await store.get(captcha_id)
+    # 两阶段每次都原子取出；验证失败必须刷新，成功才创建短期登录凭证。
+    record = await store.pop(captcha_id)
     if record is None:
         return False, "验证码已过期，请刷新"
 
@@ -432,9 +456,8 @@ async def check_captcha(captcha_id: str, x_offset, trail=None, consume: bool = F
     # 换成别的轨迹（甚至是空值绕过）来伪造。
     if consume and record.get("passed"):
         recorded_trail = record.get("trail")
-        if recorded_trail is not None and trail is not None:
-            if _trail_signature(recorded_trail) != _trail_signature(trail):
-                return False, "验证数据不一致，请重新验证"
+        if _trail_signature(recorded_trail) != _trail_signature(trail):
+            return False, "验证数据不一致，请重新验证"
 
     try:
         x_offset = int(x_offset)

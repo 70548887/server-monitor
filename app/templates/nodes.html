@@ -74,12 +74,12 @@
                     </span>
                 </td>
                 <td class="actions-cell">
-                    <button class="btn btn-sm btn-info" onclick="pingNode('{{ node.name }}')">Ping</button>
-                    <button class="btn btn-sm btn-primary" onclick="showEditNodeModal('{{ node.name }}')">编辑</button>
-                    <button class="btn btn-sm btn-warning" onclick="toggleNode('{{ node.name }}', {{ 'false' if node.enabled else 'true' }})">
+                    <button class="btn btn-sm btn-info" onclick='pingNode({{ node.name | tojson }})'>Ping</button>
+                    <button class="btn btn-sm btn-primary" onclick='showEditNodeModal({{ node.name | tojson }})'>编辑</button>
+                    <button class="btn btn-sm btn-warning" onclick='toggleNode({{ node.name | tojson }}, {{ 'false' if node.enabled else 'true' }})'>
                         {{ '禁用' if node.enabled else '启用' }}
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteNode('{{ node.name }}')">删除</button>
+                    <button class="btn btn-sm btn-danger" onclick='deleteNode({{ node.name | tojson }})'>删除</button>
                 </td>
             </tr>
             {% endfor %}
@@ -183,7 +183,8 @@
     </div>
 </div>
 
+{% endblock %}
+
 {% block scripts %}
 <script src="/static/js/nodes.js"></script>
-{% endblock %}
 {% endblock %}

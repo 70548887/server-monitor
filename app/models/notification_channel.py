@@ -187,6 +187,7 @@ class AlertIncidentModel(Base):
     跨午夜、进程重启都不会重置节奏。
     """
     __tablename__ = "alert_incidents"
+    __table_args__ = {"mysql_engine": "InnoDB"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     node_name = Column(String(100), nullable=False, index=True, comment="节点名称")
@@ -248,7 +249,8 @@ class AlertIncidentModel(Base):
             "duration_seconds": self.duration_seconds,
             "last_error": self.last_error,
             "total_failures": self.total_failures,
-            "created_at": format_iso_utc(self.created_at),
+            # created_at 由 MySQL func.now() 写入，是本地时间。
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

@@ -24,9 +24,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       # 容器内为 HTTP，故 cookie 不标记 secure
-      COOKIE_SECURE: "false"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - logs:/app/logs
+      - config-data:/app/configs
     depends_on:
       mysql:
         condition: service_healthy
@@ -47,7 +48,7 @@ services:
     command: >-
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
-      --default-time-zone=+00:00
+      --default-time-zone=+08:00
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-server_monitor}
@@ -87,3 +88,4 @@ volumes:
   mysql-data:
   redis-data:
   logs:
+  config-data:

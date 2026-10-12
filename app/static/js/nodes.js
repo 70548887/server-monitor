@@ -46,7 +46,7 @@ document.getElementById('addNodeForm').onsubmit = async (e) => {
 
 async function pingNode(name) {
     try {
-        const res = await fetch(`/api/nodes/${name}/ping`, {method: 'POST'});
+        const res = await fetch(`/api/nodes/${encodeURIComponent(name)}/ping`, {method: 'POST'});
         const data = await res.json();
         alert(`Ping 结果:\n状态码: ${data.status_code}\n延迟: ${data.latency_ms}ms\n成功: ${data.success}`);
     } catch (e) {
@@ -56,7 +56,7 @@ async function pingNode(name) {
 
 async function toggleNode(name, enabled) {
     try {
-        const res = await fetch(`/api/nodes/${name}`, {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(name)}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({enabled})
@@ -72,7 +72,7 @@ async function toggleNode(name, enabled) {
 async function deleteNode(name) {
     if (!confirm(`确定要删除节点 ${name} 吗？`)) return;
     try {
-        const res = await fetch(`/api/nodes/${name}?hard=true`, {method: 'DELETE'});
+        const res = await fetch(`/api/nodes/${encodeURIComponent(name)}?hard=true`, {method: 'DELETE'});
         if (res.ok) {
             location.reload();
         }
@@ -138,7 +138,7 @@ function updateTagsPreview() {
     const tags = input.split(',').map(t => t.trim()).filter(t => t);
     
     if (tags.length > 0) {
-        preview.innerHTML = tags.map(t => `<span class="tag">${t}</span>`).join('');
+        preview.innerHTML = tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
     } else {
         preview.innerHTML = '';
     }
@@ -220,8 +220,8 @@ async function loadAllAvailability() {
 }
 
 function updateNodeUptime(nodeName, uptime, status) {
-    const uptimeCell = document.querySelector(`.uptime-cell[data-node="${nodeName}"] .uptime-value`);
-    const statusCell = document.querySelector(`.status-cell[data-node="${nodeName}"] .badge`);
+    const uptimeCell = document.querySelector(`.uptime-cell[data-node="${CSS.escape(nodeName)}"] .uptime-value`);
+    const statusCell = document.querySelector(`.status-cell[data-node="${CSS.escape(nodeName)}"] .badge`);
     
     if (uptimeCell) {
         uptimeCell.textContent = uptime.toFixed(2) + '%';
@@ -262,7 +262,7 @@ async function loadNodeTrend(nodeName) {
 }
 
 function renderTrendBar(nodeName, trendData) {
-    const trendCell = document.querySelector(`.trend-cell[data-node="${nodeName}"] .trend-bar`);
+    const trendCell = document.querySelector(`.trend-cell[data-node="${CSS.escape(nodeName)}"] .trend-bar`);
     if (!trendCell) return;
     
     // 清空现有内容

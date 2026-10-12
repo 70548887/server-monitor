@@ -11,7 +11,7 @@ async function recalculateStats() {
             let msg = data.message + '\n\n';
             for (const [id, ch] of Object.entries(data.channels)) {
                 if (ch.changed) {
-                    msg += `${ch.name}: ${ch.old.send_count}→${ch.new.send_count} 次, 失败 ${ch.old.error_count}→${ch.new.error_count}\n`;
+                    msg += `${escapeHtml(ch.name)}: ${ch.old.send_count}→${ch.new.send_count} 次, 失败 ${ch.old.error_count}→${ch.new.error_count}\n`;
                 }
             }
             alert(msg);
@@ -44,8 +44,8 @@ async function loadRecipients() {
         emptyState.style.display = 'none';
         tbody.innerHTML = recipients.map(r => `
             <tr>
-                <td><strong>${r.name}</strong></td>
-                <td>${r.email}</td>
+                <td><strong>${escapeHtml(r.name)}</strong></td>
+                <td>${escapeHtml(r.email)}</td>
                 <td>
                     <span class="badge badge-${r.enabled ? 'success' : 'secondary'}">
                         ${r.enabled ? '已启用' : '已禁用'}
@@ -57,7 +57,7 @@ async function loadRecipients() {
                     <button class="btn btn-sm btn-${r.enabled ? 'warning' : 'success'}" onclick="toggleRecipient(${r.id}, ${!r.enabled})">
                         ${r.enabled ? '禁用' : '启用'}
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteRecipient(${r.id}, '${r.name}')">删除</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteRecipient(${r.id}, ${htmlJsArg(r.name)})">删除</button>
                 </td>
             </tr>
         `).join('');
@@ -189,14 +189,14 @@ async function loadChannels() {
         emptyState.style.display = 'none';
         tbody.innerHTML = channels.map(ch => `
             <tr data-id="${ch.id}">
-                <td><strong>${ch.name}</strong></td>
+                <td><strong>${escapeHtml(ch.name)}</strong></td>
                 <td>
                     <span class="badge badge-${ch.channel_type === 'email' ? 'info' : 'secondary'}">
                         ${ch.channel_type === 'email' ? '邮箱' : 'Webhook'}
                     </span>
                 </td>
-                <td class="url-cell" title="${ch.channel_type === 'email' ? ch.email_recipients : ch.webhook_url}">
-                    ${ch.channel_type === 'email' ? (ch.email_recipients || '-').substring(0, 30) : (ch.webhook_url || '-').substring(0, 30)}...
+                <td class="url-cell" title="${escapeHtml(ch.channel_type === 'email' ? ch.email_recipients : ch.webhook_url)}">
+                    ${escapeHtml(ch.channel_type === 'email' ? (ch.email_recipients || '-').substring(0, 30) : (ch.webhook_url || '-').substring(0, 30))}...
                 </td>
                 <td>
                     ${ch.notify_on_down ? '<span class="badge badge-danger" style="margin-right:3px;">离线</span>' : ''}
@@ -220,7 +220,7 @@ async function loadChannels() {
                     <button class="btn btn-sm btn-${ch.enabled ? 'warning' : 'success'}" onclick="toggleChannel(${ch.id}, ${!ch.enabled})">
                         ${ch.enabled ? '禁用' : '启用'}
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteChannel(${ch.id}, '${ch.name}')">删除</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteChannel(${ch.id}, ${htmlJsArg(ch.name)})">删除</button>
                 </td>
             </tr>
         `).join('');
@@ -468,7 +468,7 @@ async function loadChannelsForFilter() {
         if (!select) return;
         // 保留第一个选项
         select.innerHTML = '<option value="">全部渠道</option>' +
-            channels.map(ch => `<option value="${ch.id}">${ch.name}</option>`).join('');
+            channels.map(ch => `<option value="${ch.id}">${escapeHtml(ch.name)}</option>`).join('');
     } catch (e) {
         console.error('Failed to load channels for filter:', e);
     }
@@ -515,20 +515,20 @@ async function loadLogs(offset = 0) {
                 <tr>
                     <td><input type="checkbox" class="log-checkbox" value="${log.id}" onchange="updateLogsSelectedCount()"></td>
                     <td>${formatTime(log.sent_at)}</td>
-                    <td>${log.channel_name}</td>
+                    <td>${escapeHtml(log.channel_name)}</td>
                     <td>
                         <span class="badge badge-${getAlertTypeBadge(log.alert_type)}">
-                            ${alertTypeNames[log.alert_type] || log.alert_type}
+                            ${escapeHtml(alertTypeNames[log.alert_type] || log.alert_type)}
                         </span>
                     </td>
-                    <td>${log.node_name || '-'}</td>
-                    <td class="url-cell" title="${log.subject || ''}">${(log.subject || '-').substring(0, 30)}</td>
-                    <td class="url-cell" title="${log.recipients || ''}">${log.recipients || '-'}</td>
+                    <td>${escapeHtml(log.node_name || '-')}</td>
+                    <td class="url-cell" title="${escapeHtml(log.subject || '')}">${escapeHtml((log.subject || '-').substring(0, 30))}</td>
+                    <td class="url-cell" title="${escapeHtml(log.recipients || '')}">${escapeHtml(log.recipients || '-')}</td>
                     <td>
                         <span class="badge badge-${log.success ? 'success' : 'danger'}">
                             ${log.success ? '成功' : '失败'}
                         </span>
-                        ${!log.success && log.error_message ? `<small style="color:red;" title="${log.error_message}">🛑</small>` : ''}
+                        ${!log.success && log.error_message ? `<small style="color:red;" title="${escapeHtml(log.error_message)}">🛑</small>` : ''}
                     </td>
                     <td>${log.send_duration_ms ? log.send_duration_ms.toFixed(0) + 'ms' : '-'}</td>
                     <td>
@@ -912,7 +912,7 @@ async function loadChannelSettings() {
         container.innerHTML = channels.map(ch => `
             <div class="settings-card" data-id="${ch.id}">
                 <div class="settings-header">
-                    <h4>${ch.name}</h4>
+                    <h4>${escapeHtml(ch.name)}</h4>
                     <span class="badge badge-${ch.enabled ? 'success' : 'secondary'}">
                         ${ch.enabled ? '已启用' : '已禁用'}
                     </span>

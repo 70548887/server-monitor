@@ -7,7 +7,7 @@ from typing import Optional, AsyncGenerator, TypeVar, Callable, Any
 from contextlib import asynccontextmanager
 from functools import wraps
 
-from sqlalchemy import text
+from sqlalchemy import text, URL
 from sqlalchemy.exc import OperationalError, InterfaceError, DisconnectionError
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -51,7 +51,8 @@ def get_engine(
         return _engine
     
     # 构建 MySQL 异步连接 URL (使用 aiomysql)
-    url = f"mysql+aiomysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+    url = URL.create("mysql+aiomysql", username=user, password=password,
+                     host=host, port=port, database=database, query={"charset": "utf8mb4"})
     
     _engine = create_async_engine(
         url,

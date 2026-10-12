@@ -172,6 +172,8 @@ function initSliderCaptcha() {
                     moveX = 0;
                     captchaIdInput.value = '';
                     captchaXInput.value = '';
+                    // 失败凭证已经销毁，获取新的图片和验证码ID。
+                    setTimeout(loadCaptcha, 350);
                 }
             } catch (e) {
                 console.error('Verify failed:', e);
@@ -180,6 +182,7 @@ function initSliderCaptcha() {
                 piece.style.left = '0';
                 fill.style.width = '0';
                 moveX = 0;
+                loadCaptcha();
             }
         }
 

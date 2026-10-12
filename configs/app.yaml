@@ -47,7 +47,7 @@ alerting:
   # 与自然日无关 —— 跨午夜不会重新爆发，进程重启后节奏延续。
   #
   # reminder_intervals_minutes: 距事件开始多久提醒一次（分钟）
-  #   下面这组 = 立即 / 1h / 5h / 13h / 25h，之后每 intervals_loop_minutes 循环
+  #   下面这组 = 立即 / 1h / 4h / 8h / 12h，之后每 intervals_loop_minutes 循环
   #   前期密集（确保有人看见），后期稀疏（不再刷屏）
   reminder_intervals_minutes: [0, 60, 240, 480, 720]
   intervals_loop_minutes: 720    # 走完阶梯后的循环间隔（12h）

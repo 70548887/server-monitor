@@ -44,7 +44,7 @@ RUN apt-get update \
 # 安装编译依赖（部分包需要），装完即删
 COPY --from=builder /wheels /wheels
 COPY requirements.lock /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r /tmp/requirements.txt \
     && rm -rf /wheels /tmp/requirements.txt
 
 # 非 root 运行

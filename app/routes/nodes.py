@@ -29,34 +29,30 @@ def _get_db_repository():
         return None
 
 
-async def _db_create_node(node_data: dict):
-    """异步创建节点到数据库"""
+async def _persist_node(method: str, *args, **kwargs):
     repo = _get_db_repository()
-    if repo:
-        try:
-            await repo.create_node(node_data)
-        except Exception as e:
-            logger.warning(f"节点持久化到数据库失败: {e}")
+    if repo is None:
+        raise HTTPException(status_code=503, detail="数据库不可用，节点未保存")
+    try:
+        result = await getattr(repo, method)(*args, **kwargs)
+    except Exception as exc:
+        logger.warning("节点持久化失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="数据库操作失败，节点未保存") from exc
+    if not result:
+        raise HTTPException(status_code=503, detail="数据库操作失败，节点未保存")
+    return result
+
+
+async def _db_create_node(node_data: dict):
+    return await _persist_node("create_node", node_data)
 
 
 async def _db_update_node(name: str, update_data: dict):
-    """异步更新节点到数据库"""
-    repo = _get_db_repository()
-    if repo:
-        try:
-            await repo.update_node(name, update_data)
-        except Exception as e:
-            logger.warning(f"更新节点到数据库失败: {e}")
+    return await _persist_node("update_node", name, update_data)
 
 
 async def _db_delete_node(name: str, hard: bool):
-    """异步删除数据库节点"""
-    repo = _get_db_repository()
-    if repo:
-        try:
-            await repo.delete_node(name, hard=hard)
-        except Exception as e:
-            logger.warning(f"从数据库删除节点失败: {e}")
+    return await _persist_node("delete_node", name, hard=hard)
 
 
 def _get_node_status(name: str) -> Optional[NodeStatus]:
@@ -141,14 +137,25 @@ async def get_all_availability():
     """
     service = get_availability_service()
     all_stats = service.get_all_stats()
+    repo = _get_db_repository()
+    agg_7d, agg_30d = {}, {}
+    if repo is not None:
+        try:
+            agg_7d = await repo.get_aggregated_uptime(days=7)
+            agg_30d = await repo.get_aggregated_uptime(days=30)
+        except Exception:
+            logger.exception("读取总览聚合统计失败")
     
     results = []
-    for name, stats in all_stats.items():
+    for name in sorted(set(all_stats) | set(agg_7d) | set(agg_30d)):
+        stats = service.get_stats(name)
         results.append({
             "node_name": name,
             "uptime_24h": stats.uptime_24h,
-            "uptime_7d": stats.uptime_7d,
-            "uptime_30d": stats.uptime_30d,
+            "uptime_7d": agg_7d.get(name, {}).get("uptime"),
+            "uptime_30d": agg_30d.get(name, {}).get("uptime"),
+            "coverage_7d": agg_7d.get(name),
+            "coverage_30d": agg_30d.get(name),
             "avg_latency_ms": stats.avg_latency_ms,
             "current_status": stats.current_status,
             "last_check_at": stats.last_check_at.isoformat() + "Z" if stats.last_check_at else None,
@@ -555,6 +562,7 @@ async def get_node_availability(name: str):
     uptime_7d = None
     uptime_30d = None
     long_range_source = "unavailable"
+    agg_7d, agg_30d = {}, {}
     if repo:
         try:
             agg_7d = await repo.get_aggregated_uptime(node_name=name, days=7)
@@ -583,6 +591,8 @@ async def get_node_availability(name: str):
         "uptime_7d": uptime_7d,
         "uptime_30d": uptime_30d,
         "long_range_source": long_range_source,
+        "coverage_7d": agg_7d.get(name),
+        "coverage_30d": agg_30d.get(name),
         "long_range_note": (
             None if long_range_source == "aggregates"
             else "长周期可用性暂无数据：需先执行聚合任务将样本汇总到 aggregates 表"
@@ -637,3 +647,18 @@ async def get_node_availability_trend(
             for item in trend
         ],
     }
+
+
+@router.get("/{name}/latency/aggregates")
+async def get_node_latency_aggregates(name: str, hours: int = Query(24, ge=1, le=720)):
+    repo = _get_db_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    try:
+        if not await repo.get_node_by_name(name):
+            raise HTTPException(status_code=404, detail="节点不存在")
+        return {"node_name": name, "window_minutes": 5, "data": await repo.get_latency_aggregates(name, hours)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="读取延迟统计失败") from exc

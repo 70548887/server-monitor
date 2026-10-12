@@ -125,10 +125,10 @@ async function loadIncidents(offset = 0) {
                                 id="inc-toggle-${inc.id}" title="查看提醒历史">展开</button>
                     </td>
                     <td>${formatTime(inc.started_at)}</td>
-                    <td><a href="/ui/nodes/${encodeURIComponent(inc.node_name)}"><strong>${inc.node_name}</strong></a></td>
+                    <td><a href="/ui/nodes/${encodeURIComponent(inc.node_name)}"><strong>${escapeHtml(inc.node_name)}</strong></a></td>
                     <td>
                         <span class="badge ${inc.alert_type === 'node_down' ? 'badge-danger' : 'badge-warning'}">
-                            ${typeNames[inc.alert_type] || inc.alert_type}
+                            ${escapeHtml(typeNames[inc.alert_type] || inc.alert_type)}
                         </span>
                     </td>
                     <td><strong>${duration}</strong></td>
@@ -205,14 +205,14 @@ async function toggleIncidentDetail(incidentId) {
             <tr style="background:#fff;">
                 <td style="padding:4px 8px;">${formatTime(log.sent_at)}</td>
                 <td style="padding:4px 8px;">第 ${log.notify_seq ?? '-'} 次</td>
-                <td style="padding:4px 8px;">${log.channel_name}</td>
+                <td style="padding:4px 8px;">${escapeHtml(log.channel_name)}</td>
                 <td style="padding:4px 8px;">
                     <span class="badge ${ok ? 'badge-success' : 'badge-secondary'}">
                         ${ok ? '已送达' : '未送达'}
                     </span>
                 </td>
-                <td style="padding:4px 8px;color:#666;">${(log.subject || '').substring(0, 60)}</td>
-                ${log.error_message ? `<td style="padding:4px 8px;color:#dc3545;font-size:12px;">${log.error_message.substring(0, 50)}</td>` : '<td></td>'}
+                <td style="padding:4px 8px;color:#666;">${escapeHtml((log.subject || '').substring(0, 60))}</td>
+                ${log.error_message ? `<td style="padding:4px 8px;color:#dc3545;font-size:12px;">${escapeHtml(log.error_message.substring(0, 50))}</td>` : '<td></td>'}
             </tr>`;
         }).join('');
 
@@ -225,7 +225,7 @@ async function toggleIncidentDetail(incidentId) {
                 <tbody>${rows}</tbody>
             </table>`;
     } catch (e) {
-        body.innerHTML = `<span style="color:#dc3545;">加载失败: ${e.message}</span>`;
+        body.innerHTML = `<span style="color:#dc3545;">加载失败: ${escapeHtml(e.message)}</span>`;
     }
 }
 
@@ -312,7 +312,7 @@ async function loadAlerts(offset = 0) {
                     <td>${formatTime(alert.triggered_at)}</td>
                     <td>
                         <span class="badge badge-${typeBadges[alert.alert_type] || 'secondary'}">
-                            ${alertTypeNames[alert.alert_type] || alert.alert_type}
+                            ${escapeHtml(alertTypeNames[alert.alert_type] || alert.alert_type)}
                         </span>
                         ${alert.notify_seq > 1
                             ? `<span class="badge badge-secondary" title="本次故障的第 ${alert.notify_seq} 次提醒${alert.incident_id ? '（事件 #' + alert.incident_id + '）' : ''}">
@@ -320,8 +320,8 @@ async function loadAlerts(offset = 0) {
                                </span>`
                             : ''}
                     </td>
-                    <td><a href="/ui/nodes/${encodeURIComponent(alert.node_name)}"><strong>${alert.node_name}</strong></a></td>
-                    <td class="url-cell" title="${alert.message || ''}">${(alert.message || '-').substring(0, 50)}...</td>
+                    <td><a href="/ui/nodes/${encodeURIComponent(alert.node_name)}"><strong>${escapeHtml(alert.node_name)}</strong></a></td>
+                    <td class="url-cell" title="${escapeHtml(alert.message || '')}">${escapeHtml((alert.message || '-').substring(0, 50))}...</td>
                     <td>
                         ${alert.notification_sent
                     ? `<span class="badge badge-success">已通知(${alert.notification_count})</span>`

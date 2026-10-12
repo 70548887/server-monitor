@@ -90,7 +90,7 @@ class AlertingConfig:
     suppress_persist: bool = True
     # ===== 事件化提醒（Phase 2）=====
     # 阶梯提醒节奏：距事件开始的时间点（分钟）。
-    # [0, 60, 240, 480, 720] = 立即 / 1h / 5h / 13h / 25h，
+    # [0, 60, 240, 480, 720] = 立即 / 1h / 4h / 8h / 12h，
     # 之后按 intervals_loop_minutes 循环。节奏随故障持续时长递减，
     # 不再受自然日边界影响。
     reminder_intervals: tuple = (0, 60, 240, 480, 720)
@@ -291,6 +291,7 @@ def load_config(
         config.alerting = AlertingConfig(
             enabled=alert.get("enabled", True),
             consecutive_failures=alert.get("consecutive_failures", 3),
+            notify_on_recovery=alert.get("notify_on_recovery", True),
             latency_p95_ms=alert.get("latency_p95_ms", 2000),
             error_rate_threshold=alert.get("error_rate_threshold", 0.05),
             suppress_minutes=alert.get("suppress_minutes", 15),
@@ -502,7 +503,7 @@ def _patch_alerting_lines(lines: list, new_values: dict) -> tuple:
     return lines, replaced
 
 
-def save_alerting_config(app_config_path: str = "configs/app.yaml") -> bool:
+def save_alerting_config(app_config_path: str = "configs/app.yaml", *, alerting: Optional[AlertingConfig] = None) -> bool:
     """
     把当前告警配置写回 app.yaml
 
@@ -521,7 +522,7 @@ def save_alerting_config(app_config_path: str = "configs/app.yaml") -> bool:
     """
     global _config
 
-    if _config is None:
+    if _config is None and alerting is None:
         logger.warning("配置尚未加载，无法保存")
         return False
 
@@ -533,9 +534,11 @@ def save_alerting_config(app_config_path: str = "configs/app.yaml") -> bool:
     try:
         text = app_path.read_text(encoding="utf-8")
 
-        a = _config.alerting
+        a = alerting if alerting is not None else _config.alerting
         new_values = {
             "enabled": a.enabled,
+            "notify_on_recovery": a.notify_on_recovery,
+            "escalate_after_minutes": a.escalate_after_minutes,
             "consecutive_failures": a.consecutive_failures,
             "latency_p95_ms": a.latency_p95_ms,
             "error_rate_threshold": a.error_rate_threshold,

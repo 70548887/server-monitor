@@ -56,7 +56,7 @@ function updateSelectedNodes() {
     } else {
         const names = Array.from(checkboxes).map(cb => cb.value);
         selectedNodesEl.innerHTML = names.map(name => 
-            `<span class="selected-tag">${name}</span>`
+            `<span class="selected-tag">${escapeHtml(name)}</span>`
         ).join('');
     }
 }
@@ -154,7 +154,7 @@ function renderLatencyStats(nodesData) {
         
         return `
             <tr class="${idx === 0 ? 'highlight-row' : ''}">
-                <td><strong>${s.name}</strong>${idx === 0 ? ' <span class="badge badge-danger">延迟最高</span>' : ''}</td>
+                <td><strong>${escapeHtml(s.name)}</strong>${idx === 0 ? ' <span class="badge badge-danger">延迟最高</span>' : ''}</td>
                 <td>${s.avgLatency.toFixed(2)}ms</td>
                 <td>${s.maxLatency.toFixed(2)}ms</td>
                 <td>${s.minLatency.toFixed(2)}ms</td>

@@ -1,3 +1,9 @@
+// 纯文本和 HTML 属性统一转义；JS 参数先 JSON 编码再做属性转义。
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+}
+function htmlJsArg(value) { return escapeHtml(JSON.stringify(String(value ?? ''))); }
+
 /* 服务器监控面板 - 前端脚本 */
 
 // 主题切换功能

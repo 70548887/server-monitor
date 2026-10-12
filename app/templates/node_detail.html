@@ -13,7 +13,7 @@
     
     <div class="detail-header">
         <a href="/ui/nodes" class="btn btn-secondary">&larr; 返回列表</a>
-        <button class="btn btn-primary" onclick="pingNode('{{ node.name }}')">立即检测</button>
+        <button class="btn btn-primary" onclick='pingNode({{ node.name | tojson }})'>立即检测</button>
     </div>
     
     <div class="section">
@@ -78,11 +78,14 @@
     
     <div class="section">
         <h2>延迟趋势</h2>
+        <p id="latencyPercentiles">正在读取最近完整窗口的延迟分位数…</p>
         <div class="chart-container">
             <canvas id="nodeLatencyChart"></canvas>
         </div>
     </div>
 </div>
+
+{% endblock %}
 
 {% block scripts %}
 <script src="/static/js/node_detail.js"></script>
@@ -90,7 +93,7 @@
     // 页面加载时加载图表
     document.addEventListener('DOMContentLoaded', () => {
         loadNodeLatencyChart({{ node.name | tojson | safe }});
+        loadLatencyPercentiles({{ node.name | tojson | safe }});
     });
 </script>
-{% endblock %}
 {% endblock %}

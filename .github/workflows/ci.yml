@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master, develop]
+    tags: ['v*']
   pull_request:
     branches: [master, develop]
 
@@ -40,13 +41,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # pytest 相关工具不在 requirements.txt 中
+          pip install -r requirements.lock
+          # pytest 相关工具不在 requirements.lock 中
           pip install pytest-cov
 
       - name: 配置测试环境变量
@@ -65,7 +66,7 @@ jobs:
 
       - name: 运行测试
         run: |
-          pytest -p no:warnings --cov=app --cov-report=term-missing:skip-covered
+          RUN_MYSQL_INTEGRATION=1 pytest -p no:warnings --cov=app --cov-report=term-missing:skip-covered
 
       - name: 上传覆盖率报告
         if: always()
@@ -85,12 +86,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
 
       - name: 字节码编译检查
         # 捕获语法错误（缺括号、引号不匹配、缩进错误等）
@@ -117,15 +118,8 @@ jobs:
             exit 1
           fi
 
-      - name: 检查常见密钥模式
-        run: |
-          # 排除示例文件、测试夹具与占位符
-          PATTERNS='(smtp_password|DEFAULT_SMTP_PASSWORD|MYSQL_PASSWORD)\s*=\s*[^\s<${]+'
-          if git grep -nE "$PATTERNS" -- \
-            ':!.env.example' ':!tests/' ':!*.md' ':!.cursor/' 2>/dev/null; then
-            echo "错误：检测到疑似硬编码的密码"
-            exit 1
-          fi
+      - name: 检查硬编码凭据
+        run: python scripts/check_secrets.py
 
   docker:
     name: 构建镜像

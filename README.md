@@ -66,8 +66,8 @@ sudo nginx -t && sudo systemctl reload nginx
 `/metrics` 应限制为内网访问。
 
 > 数据库不可用时应用会降级为内存模式运行（数据不持久化），
-> 便于在没有 MySQL 的环境下先跑起来看界面。但此时**无法登录**
-> ——管理员账户存储在数据库中。
+> 若配置了 ADMIN_PASSWORD，数据库故障时可使用环境变量账号降级登录。
+> 此时用于应急查看，节点等数据库写入操作会返回失败。
 
 ### 从备份恢复
 
@@ -97,7 +97,7 @@ app/
 
 configs/app.yaml       应用配置（可被环境变量覆盖）
 configs/nodes.yaml     节点配置（仅首次为空库时导入）
-tests/                 251 个测试用例
+tests/                 单元、SQL集成与浏览器测试
 ```
 
 **技术栈**：FastAPI · SQLAlchemy(async) · MySQL · Redis · APScheduler · httpx · structlog
@@ -142,9 +142,9 @@ tests/                 251 个测试用例
   └─ 事件开启（AlertIncident）
        ├─ 第 1 次提醒    立即
        ├─ 第 2 次提醒    +1h
-       ├─ 第 3 次提醒    +5h
-       ├─ 第 4 次提醒    +13h
-       ├─ 第 5 次提醒    +25h
+       ├─ 第 3 次提醒    +4h
+       ├─ 第 4 次提醒    +8h
+       ├─ 第 5 次提醒    +12h
        └─ 之后每 12h 一次
   └─ 节点恢复
        └─ 立即发送恢复通知（附故障时长与期间提醒次数），事件关闭
@@ -196,7 +196,7 @@ alerting:
 
 | | 改造前 | 改造后 |
 |---|---|---|
-| 邮件总数 | ~20 | 4（含静默时段则更少） |
+| 邮件总数 | ~20 | 5（24小时边界前；静默时段可进一步减少） |
 | 跨午夜 | **重新爆发** | 无影响 |
 | 进程重启 | 抑制丢失，刷屏 | 节奏延续 |
 | 提醒内容 | 逐封相同 | 递增（显示已持续时长） |
@@ -217,14 +217,34 @@ alerting:
 
 每个 5 分钟窗口除计数与可用性外，还写入延迟的
 `min / avg / max / p50 / p95 / p99`。分位数采用线性插值
-（与 NumPy `percentile` 默认口径一致），便于日后换用
-MySQL 8 的 `PERCENT_RANK_CONT` 时数值可比对。
+（与 NumPy `percentile` 默认口径一致）。MySQL 5.7/8 均使用这套计算，
+不依赖不存在的 `PERCENT_RANK_CONT` 内置函数。节点详情展示最近完整窗口，
+`GET /api/nodes/{name}/latency/aggregates?hours=24` 返回逐窗口分位数。
+
+### 历史聚合补算
+
+停用其他聚合写入进程后执行；脚本先备份事件与聚合表，再按6小时批次重建现存样本覆盖的完整窗口：
+
+```bash
+python scripts/repair_aggregates.py          # 预览范围
+python scripts/repair_aggregates.py --apply  # 备份后执行，可幂等重跑
+```
+
+不会按年龄删除未覆盖的历史统计。旧样本已清理的范围无法补算；备份和执行日志保存在忽略版本管理的 `logs/`。
+
+旧事件若由本地时间错误写入恢复时间，可执行 `python scripts/repair_incident_times.py --legacy-offset-hours 8` 预览。仅当首个成功样本与修正时间吻合、原时长一致时才列为候选；加 `--apply` 后先备份、再按原值条件更新，重复执行不二次偏移。
 
 ## 测试
 
 ```bash
-python -m pytest              # 287 passed, 30 skipped
+python -m pytest              # 默认不连接真实数据库或启动浏览器
 python -m pytest -v           # 详细输出
+# PowerShell：启用真实MySQL集成（只写临时测试库）
+$env:RUN_MYSQL_INTEGRATION="1"
+python -m pytest tests/test_mysql_integration.py
+# 浏览器验收另需安装 playwright 及 Chromium
+$env:RUN_BROWSER_TESTS="1"
+python -m pytest tests/test_browser.py
 ```
 
 - 单元测试不依赖 MySQL / Redis，可直接运行
@@ -258,7 +278,7 @@ python -m pytest -v           # 详细输出
 | 字段 | 写入方式 | 存储时区 | 序列化 |
 |---|---|---|---|
 | `samples.timestamp` | `utcnow()` | UTC | 趋势图显式加 `Z` |
-| `alert_incidents.*` | 来自心跳时间戳 | UTC | 加 `Z`（`format_iso_utc`） |
+| `alert_incidents.started_at/last_notified_at/next_notify_at/resolved_at` | 心跳UTC时间 / `utcnow()` | UTC | 加 `Z`（`format_iso_utc`） |
 | `alert_logs.triggered_at` | `datetime.now()` | **本地** | 不加 `Z` |
 | `notification_logs.sent_at` | MySQL `func.now()` | **本地** | 不加 `Z` |
 
@@ -288,11 +308,9 @@ python -m pytest -v           # 详细输出
 - **时区约定未统一**：4 个时间字段分属 UTC 与本地两种约定
   （详见[时间约定](#时间约定)）。当前各表内部自洽、显示正确，
   但跨表按时间关联查询需先换算。统一需迁移 4.2 万行数据
-- **分位数在 Python 侧计算**：MySQL 5.7 无窗口函数
-  （`PERCENT_RANK_CONT` 需 8.0+），故由 SQL 取回窗口内延迟数组后
-  在 Python 排序求分位。当前样本量下开销可忽略
-  （单次聚合约 2300 条，窗口内单节点仅 5 条）；
-  若升级到 8.0+ 或节点数增长十倍，应改用窗口函数下沉到 SQL
+- **分位数在 Python 侧计算**：按有限时间批次读取延迟样本。节点数增大时需监控聚合内存与耗时。
+- **历史覆盖范围**：7天/30天值是该时间范围内已采样数据的比例；接口同时返回实际覆盖起止和窗口数，缺测不当作成功。
+- **历史通知关联**：旧版本未写事件ID的发送记录保持原样，无法仅凭时间可靠推断归属；新通知完整写入事件与提醒序号。
 - **单实例假设**：内存可用性统计与内存 Session 降级不支持多进程部署
 
 ## 版本管理

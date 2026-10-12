@@ -637,6 +637,7 @@ async def get_alert_config():
     
     return {
         "enabled": config.alerting.enabled,
+        "escalate_after_minutes": config.alerting.escalate_after_minutes,
         "consecutive_failures": config.alerting.consecutive_failures,
         "latency_p95_ms": config.alerting.latency_p95_ms,
         "error_rate_threshold": config.alerting.error_rate_threshold,
@@ -679,11 +680,13 @@ async def update_alert_config(data: AlertConfigUpdate):
     """
     from ..services.config import get_config
     config = get_config()
+    from dataclasses import replace
+    candidate = replace(config.alerting)
     
     updated_fields = {}
     
     if data.enabled is not None:
-        config.alerting.enabled = data.enabled
+        candidate.enabled = data.enabled
         updated_fields["enabled"] = data.enabled
     
     if data.consecutive_failures is not None:
@@ -692,7 +695,7 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "连续失败次数必须在 1-100 之间"}
             )
-        config.alerting.consecutive_failures = data.consecutive_failures
+        candidate.consecutive_failures = data.consecutive_failures
         updated_fields["consecutive_failures"] = data.consecutive_failures
     
     if data.latency_p95_ms is not None:
@@ -701,7 +704,7 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "延迟阈值必须在 100-60000ms 之间"}
             )
-        config.alerting.latency_p95_ms = data.latency_p95_ms
+        candidate.latency_p95_ms = data.latency_p95_ms
         updated_fields["latency_p95_ms"] = data.latency_p95_ms
     
     if data.suppress_minutes is not None:
@@ -710,11 +713,11 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "抑制时间必须在 1-1440 分钟之间"}
             )
-        config.alerting.suppress_minutes = data.suppress_minutes
+        candidate.suppress_minutes = data.suppress_minutes
         updated_fields["suppress_minutes"] = data.suppress_minutes
     
     if data.notify_on_recovery is not None:
-        config.alerting.notify_on_recovery = data.notify_on_recovery
+        candidate.notify_on_recovery = data.notify_on_recovery
         updated_fields["notify_on_recovery"] = data.notify_on_recovery
 
     # ---------- 事件化提醒节奏 ----------
@@ -740,7 +743,7 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "提醒时刻最多 20 个"}
             )
-        config.alerting.reminder_intervals = tuple(intervals)
+        candidate.reminder_intervals = tuple(intervals)
         updated_fields["reminder_intervals_minutes"] = intervals
 
     if data.intervals_loop_minutes is not None:
@@ -749,7 +752,7 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "循环间隔必须在 10-10080 分钟之间"}
             )
-        config.alerting.intervals_loop_minutes = data.intervals_loop_minutes
+        candidate.intervals_loop_minutes = data.intervals_loop_minutes
         updated_fields["intervals_loop_minutes"] = data.intervals_loop_minutes
 
     if data.max_notifications_per_incident is not None:
@@ -758,12 +761,12 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "单事件提醒上限不能为负（0 表示不限）"}
             )
-        config.alerting.max_notifications_per_incident = data.max_notifications_per_incident
+        candidate.max_notifications_per_incident = data.max_notifications_per_incident
         updated_fields["max_notifications_per_incident"] = data.max_notifications_per_incident
 
     # ---------- 夜间静默 ----------
     if data.quiet_hours_enabled is not None:
-        config.alerting.quiet_hours_enabled = data.quiet_hours_enabled
+        candidate.quiet_hours_enabled = data.quiet_hours_enabled
         updated_fields["quiet_hours_enabled"] = data.quiet_hours_enabled
 
     if data.quiet_hours_start is not None:
@@ -772,7 +775,7 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E005", "message": "静默开始时间格式错误，请使用 HH:MM"}
             )
-        config.alerting.quiet_hours_start = data.quiet_hours_start
+        candidate.quiet_hours_start = data.quiet_hours_start
         updated_fields["quiet_hours_start"] = data.quiet_hours_start
 
     if data.quiet_hours_end is not None:
@@ -781,11 +784,11 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E005", "message": "静默结束时间格式错误，请使用 HH:MM"}
             )
-        config.alerting.quiet_hours_end = data.quiet_hours_end
+        candidate.quiet_hours_end = data.quiet_hours_end
         updated_fields["quiet_hours_end"] = data.quiet_hours_end
 
-    if config.alerting.quiet_hours_enabled and \
-            config.alerting.quiet_hours_start == config.alerting.quiet_hours_end:
+    if candidate.quiet_hours_enabled and \
+            candidate.quiet_hours_start == candidate.quiet_hours_end:
         raise HTTPException(
             status_code=400,
             detail={"code": "E006", "message": "静默时段的开始与结束时间不能相同"}
@@ -798,19 +801,17 @@ async def update_alert_config(data: AlertConfigUpdate):
                 status_code=400,
                 detail={"code": "E006", "message": "升级阈值必须在 0-10080 分钟之间（0 表示不启用）"}
             )
-        config.alerting.escalate_after_minutes = data.escalate_after_minutes
+        candidate.escalate_after_minutes = data.escalate_after_minutes
         updated_fields["escalate_after_minutes"] = data.escalate_after_minutes
     
-    # 同步更新 AlertingService 的配置
-    from ..services.alerting import get_alerting_service
-    alerting_service = get_alerting_service()
-    alerting_service._config = config.alerting
-
-    # 落盘，否则重启后回到文件里的旧值
+    # 校验全部通过并持久化后，才发布新配置；失败请求不会部分生效。
     from ..services.config import save_alerting_config
-    saved = save_alerting_config()
-    if not saved:
-        logger.warning("告警配置已生效但未能写回 app.yaml，重启后将恢复旧值")
+    if not save_alerting_config(alerting=candidate):
+        raise HTTPException(status_code=503, detail="配置保存失败，原配置保持不变")
+    config.alerting = candidate
+    from ..services.alerting import get_alerting_service
+    get_alerting_service()._config = candidate
+    saved = True
 
     logger.info(f"Updated alert config: {updated_fields}")
 
@@ -819,16 +820,18 @@ async def update_alert_config(data: AlertConfigUpdate):
         "persisted": saved,
         "updated": updated_fields,
         "current": {
-            "enabled": config.alerting.enabled,
-            "consecutive_failures": config.alerting.consecutive_failures,
-            "latency_p95_ms": config.alerting.latency_p95_ms,
-            "suppress_minutes": config.alerting.suppress_minutes,
-            "notify_on_recovery": config.alerting.notify_on_recovery,
-            "reminder_intervals_minutes": list(config.alerting.reminder_intervals),
-            "intervals_loop_minutes": config.alerting.intervals_loop_minutes,
-            "quiet_hours_enabled": config.alerting.quiet_hours_enabled,
-            "quiet_hours_start": config.alerting.quiet_hours_start,
-            "quiet_hours_end": config.alerting.quiet_hours_end,
+            "enabled": candidate.enabled,
+            "escalate_after_minutes": candidate.escalate_after_minutes,
+            "max_notifications_per_incident": candidate.max_notifications_per_incident,
+            "consecutive_failures": candidate.consecutive_failures,
+            "latency_p95_ms": candidate.latency_p95_ms,
+            "suppress_minutes": candidate.suppress_minutes,
+            "notify_on_recovery": candidate.notify_on_recovery,
+            "reminder_intervals_minutes": list(candidate.reminder_intervals),
+            "intervals_loop_minutes": candidate.intervals_loop_minutes,
+            "quiet_hours_enabled": candidate.quiet_hours_enabled,
+            "quiet_hours_start": candidate.quiet_hours_start,
+            "quiet_hours_end": candidate.quiet_hours_end,
         }
     }
 

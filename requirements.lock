@@ -7,7 +7,7 @@
 #   requirements.txt  —— 版本下限，声明"需要什么"，便于本地开发
 #   requirements.lock —— 精确版本，声明"用哪个"，CI 与生产部署使用
 #
-# 本文件由当前验证通过的���境导出，非手工编写：
+# 本文件由当前验证通过的环境导出，非手工编写：
 #   pip freeze | grep -iE "^(fastapi|httpx|...)=" > requirements.lock
 #
 # 升级依赖的流程：
@@ -81,7 +81,7 @@ idna==3.11
 anyio==4.14.1
 click==8.4.2
 
-# ---------- 测试（生产镜像不装，见 .dockerignore）----------
+# ---------- 测试（与当前验证环境一致）----------
 pytest==9.1.1
 pytest-asyncio==1.4.0
 iniconfig==2.3.0
@@ -93,3 +93,15 @@ colorama==0.4.6
 httptools==0.8.0
 watchfiles==1.2.0
 websockets==13.1
+# ---------- 已验证的传递依赖 ----------
+annotated-doc==0.0.4
+cffi==2.1.0
+packaging==26.2
+pycparser==3.0
+pydantic-core==2.46.4
+pygments==2.20.0
+six==1.17.0
+typing-extensions==4.16.0
+typing-inspection==0.4.2
+tzdata==2026.3
+tzlocal==5.4.4
