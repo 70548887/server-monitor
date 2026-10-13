@@ -37,7 +37,14 @@ class ServerManager:
         self.token = None
         self.python = read_json(self.store.home / "runtime.json", {"python":sys.executable})["python"]
         if not Path(self.python).is_file():
-            raise UpdateError("已配置的Python运行环境不存在，请恢复环境后启动")
+            # 文件事务尚未提交时，新依赖环境可能因中断而缺失。
+            # 先从校验通过的备份选择旧解释器；实际文件恢复仍在 run() 的端口检查和锁内执行。
+            transaction = read_json(self.store.home / "transaction.json")
+            if transaction:
+                previous = self.store.backup_manifest(transaction.get("backup", ""))
+                self.python = previous["python"]
+            if not transaction or not Path(self.python).is_file():
+                raise UpdateError("已配置的Python运行环境不存在，且没有可用的事务恢复环境")
 
     def heartbeat(self):
         atomic_json(self.store.home / "manager.json", {"pid":os.getpid(), "session":self.session,

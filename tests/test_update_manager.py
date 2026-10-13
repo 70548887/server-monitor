@@ -116,6 +116,31 @@ def test_crash_journal_recovers_on_manager_start(manager):
     assert mgr.store.read()["rolled_back"]
 
 
+def test_missing_new_python_still_allows_pending_transaction_recovery(tmp_path):
+    root = project(tmp_path / "interrupted")
+    mgr = ServerManager(root)
+    original = file_hashes(root)
+    backup = mgr.store.backup(sys.executable)
+    (root / "app/__init__.py").write_text('__version__ = "1.1.0"\n')
+    atomic_json(mgr.store.home / "runtime.json", {"python": str(root / ".updates/runtimes/missing/python.exe")})
+    atomic_json(mgr.store.home / "transaction.json", {"backup": backup["name"], "changed_files": list(original)})
+    recovered = ServerManager(root)
+    assert recovered.python == sys.executable
+    assert package_version(root) == "1.1.0"  # 未取得启动锁前不得改文件。
+    recovered.recover_transaction()
+    assert file_hashes(root) == original
+    assert read_json(mgr.store.home / "runtime.json")["python"] == sys.executable
+    assert not (mgr.store.home / "transaction.json").exists()
+
+
+def test_missing_python_without_recovery_backup_is_not_silently_replaced(tmp_path):
+    root = project(tmp_path / "no-backup")
+    mgr = ServerManager(root)
+    atomic_json(mgr.store.home / "runtime.json", {"python": str(root / "missing-python.exe")})
+    with pytest.raises(UpdateError, match="没有可用的事务恢复环境"):
+        ServerManager(root)
+
+
 def test_existing_listener_prevents_transaction_recovery(tmp_path):
     root=project(tmp_path/"fixture")
     with socket.socket() as listener:
