@@ -56,11 +56,17 @@ async def test_login_slider_node_crud_and_percentile_page(mysql_store, monkeypat
                 page.on("pageerror", lambda exc: errors.append(str(exc)))
                 await page.route("**/*", lambda route: route.continue_() if route.request.url.startswith(url) else route.abort())
                 await page.goto(url + "/login")
+                await page.locator("#username").fill("browser-test")
+                await page.locator("#password").fill("BrowserFixture-123!")
+                await page.locator("#loginBtn").click()
                 await page.locator("#sliderHandle").wait_for()
                 # 测试进程读取自身生成的挑战答案；实际通过鼠标操作验证前后端协议。
                 record = next(iter(isolated_captcha._memory._data.values()))[1]
                 target = record["x"]
                 box = await page.locator("#sliderHandle").bounding_box()
+                track = await page.locator("#sliderTrack").bounding_box()
+                # 原始图片310px，拼图50px；按显示轨道宽度换算实际拖动距离。
+                travel_scale = (track["width"] - 2 - box["width"]) / 260
                 x,y = box["x"] + box["width"]/2,box["y"] + box["height"]/2
                 await page.mouse.move(x,y)
                 await page.mouse.down()
@@ -69,14 +75,10 @@ async def test_login_slider_node_crud_and_percentile_page(mysql_store, monkeypat
                 i = 0
                 while position < target:
                     position = min(target, position + steps[i % len(steps)])
-                    await page.mouse.move(x+position,y)
+                    await page.mouse.move(x+position*travel_scale,y)
                     await asyncio.sleep(.025)
                     i += 1
                 await page.mouse.up()
-                await expect(page.locator("#loginBtn")).to_be_enabled()
-                await page.locator("#username").fill("browser-test")
-                await page.locator("#password").fill("BrowserFixture-123!")
-                await page.locator("#loginBtn").click()
                 await page.wait_for_url("**/ui/**")
 
                 name = "O'Reilly 审计节点"

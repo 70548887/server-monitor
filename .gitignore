@@ -74,3 +74,4 @@ scratch/
 coverage.xml
 *.lcov
 node_modules/
+.updates/

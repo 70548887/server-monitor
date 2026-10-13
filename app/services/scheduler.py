@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import get_config, NodeConfig, NodeExpectConfig
+from .config import get_config, NodeConfig, publish_node_snapshot
 from .heartbeat import HeartbeatService, HeartbeatResult
 from .observability import metrics
 
@@ -49,30 +49,18 @@ class SchedulerService:
         try:
             from app.repositories.mysql_repository import get_mysql_repository
             repo = get_mysql_repository()
-            db_nodes = await repo.get_all_nodes()
+            db_nodes = await repo.get_all_nodes(strict=True)
             
-            # 转换为 NodeConfig 格式
-            nodes = []
-            for n in db_nodes:
-                if n.get("enabled", True):  # 只检测启用的节点
-                    nodes.append(NodeConfig(
-                        name=n["name"],
-                        url=n["url"],
-                        region=n.get("region", "default"),
-                        tags=n.get("tags", []),
-                        timeout_ms=n.get("timeout_ms", 2000),
-                        enabled=n.get("enabled", True),
-                        expect=NodeExpectConfig(
-                            status=n.get("expect_status", 200),
-                            body_contains=n.get("expect_body_contains"),
-                        ),
-                    ))
-            return nodes
+            # 完整快照包含禁用节点，失败回退也必须使用最近确认的数据库配置。
+            # 空库同样更新快照，防止后续故障时重新探测已删除的旧节点。
+            nodes = [NodeConfig.from_database(n) for n in db_nodes]
+            publish_node_snapshot(get_config(), nodes)
+            return [node for node in nodes if node.enabled]
         except Exception as e:
             logger.error(f"从数据库获取节点失败: {e}")
-            # 回退到配置文件
+            # 成功读取/重载后是数据库快照；首次成功前仍是启动配置。
             config = get_config()
-            return config.nodes
+            return [node for node in config.nodes if node.enabled]
     
     async def _run_heartbeat_task(self):
         """执行心跳检测任务"""

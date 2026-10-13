@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from ..schemas.node import NodeConfig, NodeStatus, NodeCreate, NodeUpdate, NodeExpect
-from ..services.config import get_config, reload_nodes
+from ..services.config import get_config, NodeConfig as RuntimeNodeConfig, publish_node_snapshot
 from ..services.scheduler import get_scheduler
 from ..services.availability import get_availability_service, AvailabilityService
 
@@ -63,6 +63,19 @@ def _get_node_status(name: str) -> Optional[NodeStatus]:
 def _update_node_status(name: str, status: NodeStatus):
     """更新节点状态"""
     _node_status_cache[name] = status
+
+
+def _publish_node(node):
+    config = get_config()
+    publish_node_snapshot(config, [n for n in config.nodes if n.name != node.name] + [node])
+
+
+def result_is_current(name, result, *, allow_disabled=False):
+    node = next((n for n in get_config().nodes if n.name == name), None)
+    if node is None or (not node.enabled and not allow_disabled) or node.url != result.url:
+        return False
+    revision = getattr(result, "probe_revision", None)
+    return revision is None or revision == node.probe_revision
 
 
 @router.get("", response_model=list[NodeStatus])
@@ -265,6 +278,7 @@ async def create_node(node: NodeCreate):
     })
     
     logger.info(f"节点已创建: {node.name}")
+    _publish_node(RuntimeNodeConfig.from_database(node.model_dump()))
     
     # 返回状态
     status = NodeStatus(
@@ -319,29 +333,19 @@ async def update_node(name: str, update: NodeUpdate):
         }
     
     # 持久化到数据库
+    runtime = RuntimeNodeConfig.from_database({**node, **update_data})
     await _db_update_node(name, update_data)
     logger.info(f"Node updated: {name}")
+    previous = next((n for n in get_config().nodes if n.name == name), None)
+    _publish_node(runtime)
     
     # 更新缓存状态
     cached = _get_node_status(name)
-    if cached:
-        if update.url is not None:
-            cached.url = update.url
-        if update.region is not None:
-            cached.region = update.region
-        if update.tags is not None:
-            cached.tags = update.tags
-        if update.enabled is not None:
-            cached.enabled = update.enabled
-    else:
-        cached = NodeStatus(
-            name=name,
-            url=update.url or node.get("url", ""),
-            region=update.region or node.get("region", "default"),
-            tags=update.tags or node.get("tags", []),
-            enabled=update.enabled if update.enabled is not None else node.get("enabled", True),
-        )
-        _update_node_status(name, cached)
+    if cached and (cached.url != runtime.url or (previous and previous.probe_key() != runtime.probe_key())):
+        cached = None
+    fields = dict(name=name, url=runtime.url, region=runtime.region, tags=list(runtime.tags), enabled=runtime.enabled)
+    cached = cached.model_copy(update=fields, deep=True) if cached else NodeStatus(**fields)
+    _update_node_status(name, cached)
     
     return cached
 
@@ -371,6 +375,11 @@ async def delete_node(name: str, hard: bool = Query(False, description="是否�
     
     # 持久化到数据库
     await _db_delete_node(name, hard=hard)
+    config = get_config()
+    if hard:
+        publish_node_snapshot(config, [n for n in config.nodes if n.name != name])
+    else:
+        _publish_node(RuntimeNodeConfig.from_database({**node, "enabled": False}))
     
     if hard:
         # 硬删除 - 清除缓存
@@ -413,41 +422,15 @@ async def ping_node(name: str):
     
     # 执行心跳检测
     from ..services.heartbeat import HeartbeatService
-    from ..services.config import NodeConfig as ConfigNode, NodeExpectConfig
     
     service = HeartbeatService()
     
     try:
-        result = await service.check_node(ConfigNode(
-            name=node["name"],
-            url=node["url"],
-            region=node.get("region", "default"),
-            tags=node.get("tags", []),
-            timeout_ms=node.get("timeout_ms", 2000),
-            enabled=True,
-            expect=NodeExpectConfig(
-                status=node.get("expect_status", 200),
-                body_contains=node.get("expect_body_contains"),
-            ),
-        ))
-        
-        # 更新缓存状态
-        cached = _get_node_status(name) or NodeStatus(
-            name=node["name"],
-            url=node["url"],
-            region=node.get("region", "default"),
-            tags=node.get("tags", []),
-            enabled=node.get("enabled", True),
-        )
-        cached.last_status_code = result.status_code
-        cached.last_latency_ms = result.latency_ms
-        cached.last_error = result.error_message
-        cached.last_check_at = result.timestamp
-        if result.success:
-            cached.consecutive_failures = 0
-        else:
-            cached.consecutive_failures += 1
-        _update_node_status(name, cached)
+        runtime = RuntimeNodeConfig.from_database(node)
+        _publish_node(runtime)
+        # check_node 本身允许人工检测禁用节点，保留真实配置版本用于拒绝迟到结果。
+        result = await service.check_node(runtime)
+        accepted = update_node_status_from_result(name, result, node, allow_disabled=True)
         
         return {
             "node": name,
@@ -457,6 +440,7 @@ async def ping_node(name: str):
             "success": result.success,
             "error_type": result.error_type,
             "error_message": result.error_message,
+            "applied": accepted,
         }
     
     finally:
@@ -465,33 +449,61 @@ async def ping_node(name: str):
 
 @router.post("/reload")
 async def reload_node_config():
-    """
-    热重载节点配置
-    
-    从 nodes.yaml 文件重新加载节点列表。
-    """
+    """从数据库刷新节点配置与状态缓存；不触发探测或导入 YAML。"""
+    global _node_status_cache
+
+    repo = _get_db_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="数据库不可用，节点配置未重载")
     try:
-        nodes = reload_nodes()
-        return {
-            "message": "Nodes reloaded successfully",
-            "count": len(nodes),
-        }
-    except Exception as e:
-        logger.error(f"重新加载节点失败: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "E006", "message": f"Failed to reload: {str(e)}"},
-        )
+        # strict 区分空库和查询失败：失败不能清空当前配置。
+        rows = await repo.get_all_nodes(strict=True)
+        nodes = [RuntimeNodeConfig.from_database(row) for row in rows]
+        if len({n.name for n in nodes}) != len(nodes):
+            raise ValueError("数据库快照包含重复节点名称")
+
+        config = get_config()
+        previous = {node.name: node for node in config.nodes}
+        refreshed = {}
+        for node in nodes:
+            cached = _get_node_status(node.name)
+            fields = dict(name=node.name, url=node.url, region=node.region,
+                          tags=list(node.tags), enabled=node.enabled)
+            old = previous.get(node.name)
+            if cached is not None and cached.url == node.url and (old is None or old.probe_key() == node.probe_key()):
+                # 配置以数据库为准；同一检测地址的实时状态继续保留。
+                refreshed[node.name] = cached.model_copy(update=fields, deep=True)
+            else:
+                # 新节点或更换地址的节点，不沿用旧目标的检测结果。
+                refreshed[node.name] = NodeStatus(**fields)
+    except Exception as exc:
+        logger.error("数据库节点重载失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="读取节点配置失败，原配置保持不变") from exc
+
+    # 全部校验通过后一次发布，两次赋值间没有 await。
+    publish_node_snapshot(config, nodes)
+    _node_status_cache = refreshed
+    logger.info("已从数据库重载 %s 个节点", len(nodes))
+    return {
+        "message": "节点配置已从数据库重载，下轮检测使用最新配置",
+        "count": len(nodes),
+        "enabled_count": sum(node.enabled for node in nodes),
+        "source": "database",
+    }
 
 
 # 供其他模块更新节点状态
-def update_node_status_from_result(name: str, result, node_info: dict = None):
+def update_node_status_from_result(name: str, result, node_info: dict = None, *, allow_disabled=False):
     """
     从心跳结果更新节点状态缓存
     
     node_info: 可选的节点信息字典，用于初始化缓存
     """
+    if not result_is_current(name, result, allow_disabled=allow_disabled):
+        return False
     cached = _get_node_status(name)
+    if cached and cached.last_check_at and cached.last_check_at > result.timestamp:
+        return False
     
     if not cached:
         # 使用传入的节点信息创建缓存
@@ -507,7 +519,7 @@ def update_node_status_from_result(name: str, result, node_info: dict = None):
             # 没有节点信息，创建最小化缓存
             cached = NodeStatus(
                 name=name,
-                url="",
+                url=result.url,
                 region="default",
                 tags=[],
                 enabled=True,
@@ -524,6 +536,7 @@ def update_node_status_from_result(name: str, result, node_info: dict = None):
         cached.consecutive_failures += 1
     
     _update_node_status(name, cached)
+    return True
 
 
 # ============= 可用性统计 API =============

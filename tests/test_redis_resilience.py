@@ -200,6 +200,6 @@ class TestRateLimitDegradation:
 class _UnreachableRedis:
     """模拟连不上的 Redis 仓库"""
 
-    async def increment_error_count(self, key, window):
+    async def rate_limit_increment(self, key, window):
         # 与真实客户端同样的失败语义
         raise ConnectionError("模拟 Redis 不可用")

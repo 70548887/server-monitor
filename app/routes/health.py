@@ -2,6 +2,7 @@
 
 import time
 import logging
+import os
 from datetime import datetime
 
 from fastapi import APIRouter, Response
@@ -27,6 +28,8 @@ async def health_check():
     - unhealthy: 核心组件异常，服务不可用
     """
     health_status = metrics.get_health_status()
+    # 随机实例标识用于独立管理器确认启动的是本次创建的进程，不是旧监听者。
+    health_status["instance_id"] = os.getenv("MONITOR_INSTANCE")
     
     # 根据状态返回对应 HTTP 状态码
     if health_status["status"] == "healthy":

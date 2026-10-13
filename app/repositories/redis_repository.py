@@ -223,6 +223,44 @@ class RedisRepository:
             )
             return None
     
+    async def rate_limit_increment(self, key: str, window_seconds: int) -> int:
+        """限流专用严格接口：原子计数/过期，连接异常交给调用方降级。"""
+        client = await self._get_client()
+        return int(await client.eval("""
+            local count = redis.call('INCR', KEYS[1])
+            if redis.call('TTL', KEYS[1]) < 0 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+        """, 1, f"{self._prefix}node:{key}:errors", window_seconds))
+
+    def _login_limit_keys(self, prefix: str, ip: str):
+        # 保留已有键格式，升级后不会重置尚未过期的失败次数和锁定。
+        return (f"{self._prefix}node:{prefix}login_fail:{ip}:errors",
+                f"{self._prefix}alert:suppress:{prefix}login_lock:{ip}")
+
+    async def login_failure_increment(self, prefix: str, ip: str, limit: int, seconds: int) -> bool:
+        client = await self._get_client()
+        count = await client.eval("""
+            local count = redis.call('INCR', KEYS[1])
+            if redis.call('TTL', KEYS[1]) < 0 then
+                redis.call('EXPIRE', KEYS[1], ARGV[2])
+            end
+            if count >= tonumber(ARGV[1]) then
+                redis.call('SETEX', KEYS[2], ARGV[2], '1')
+            end
+            return count
+        """, 2, *self._login_limit_keys(prefix, ip), limit, seconds)
+        return int(count) >= limit
+
+    async def login_lock_ttl(self, prefix: str, ip: str) -> int:
+        client = await self._get_client()
+        return int(await client.ttl(self._login_limit_keys(prefix, ip)[1]))
+
+    async def clear_login_limits(self, prefix: str, ip: str):
+        client = await self._get_client()
+        await client.delete(*self._login_limit_keys(prefix, ip))
+
     async def increment_error_count(self, node_name: str, window_seconds: int = 300) -> int:
         """
         增加错误计数（滑动窗口）
