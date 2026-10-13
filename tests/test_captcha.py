@@ -147,6 +147,18 @@ class TestCaptchaGeneration:
         assert cap["bg"].startswith("data:image/png;base64,")
         assert cap["slider"].startswith("data:image/png;base64,")
 
+    def test_puzzle_has_transparent_contour_inside_image(self):
+        import base64
+        import io
+        from PIL import Image
+        data = SliderCaptcha().generate()
+        piece = Image.open(io.BytesIO(base64.b64decode(data["slider"])))
+        background = Image.open(io.BytesIO(base64.b64decode(data["bg"])))
+        assert piece.mode == "RGBA"
+        assert piece.getchannel("A").getextrema() == (0, 255)
+        assert data["x"] + piece.width < background.width
+        assert data["y"] + piece.height < background.height
+
     async def test_fallback_background_has_texture(self):
         """
         降级背景也要有足够纹理

@@ -22,7 +22,7 @@ import hashlib
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageEnhance
 
 # 背景图目录：绝对路径。
 # 原实现用相对路径 os.path.join("app", "static", ...)，
@@ -57,47 +57,35 @@ class SliderCaptcha:
     def generate(self):
         """生成验证码图片和位置信息"""
         bg = self._load_local_bg() or self._create_random_bg()
+        bg = ImageEnhance.Color(bg).enhance(0.65)
 
         # 缺口位置（避开左右边缘，确保滑块完整可见）
         x = random.randint(self.slider_size + 20, self.width - self.slider_size - 20)
         y = random.randint(20, self.height - self.slider_size - 20)
 
-        # 滑块图 = 背景在缺口处的裁剪
-        slider = Image.new(
-            "RGBA", (self.slider_size, self.slider_size), (0, 0, 0, 0)
-        )
-        slider.paste(bg.crop((x, y, x + self.slider_size, y + self.slider_size)), (0, 0))
+        # 共用抗锯齿拼图轮廓，缺口与拼图精确一致，避免方块叠影。
+        scale = self.slider_size * 4 / 50
+        mask = Image.new("L", (self.slider_size * 4, self.slider_size * 4), 0)
+        draw = ImageDraw.Draw(mask)
+        box = lambda coords: tuple(round(v * scale) for v in coords)
+        draw.rounded_rectangle(box((2, 10, 47, 47)), radius=round(3 * scale), fill=255)
+        draw.ellipse(box((16, 1, 32, 18)), fill=255)
+        draw.ellipse(box((37, 21, 54, 37)), fill=0)
+        mask = mask.resize((self.slider_size, self.slider_size), Image.Resampling.LANCZOS)
+        edge = ImageChops.subtract(mask, mask.filter(ImageFilter.MinFilter(3)))
 
-        # 在背景上标出缺口。
-        # 早期是半透明黑色方块，视觉上过于明显。
-        # 改为：主体压暗 + 描边 + 外阴影，接近真实"挖空"效果。
-        draw = ImageDraw.Draw(bg, "RGBA")
-        draw.rectangle(
-            [x, y, x + self.slider_size, y + self.slider_size],
-            fill=(0, 0, 0, 90),
-        )
-        draw.rectangle(
-            [x, y, x + self.slider_size, y + self.slider_size],
-            outline=(255, 255, 255, 160),
-            width=2,
-        )
-        # 缺口投影，增加立体感
-        shadow = Image.new("RGBA", bg.size, (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rectangle(
-            [x + 2, y + 2, x + self.slider_size + 2, y + self.slider_size + 2],
-            fill=(0, 0, 0, 90),
-        )
-        bg = Image.alpha_composite(bg.convert("RGBA"), shadow.filter(
-            ImageFilter.GaussianBlur(2)
-        )).convert("RGB")
+        slider = bg.crop((x, y, x + self.slider_size, y + self.slider_size)).convert("RGBA")
+        slider.putalpha(mask)
+        border = Image.new("RGBA", slider.size, (255, 255, 255, 0))
+        border.putalpha(edge)
+        slider = Image.alpha_composite(slider, border)
 
-        # 滑块加一圈浅边，使其在背景上更易辨识（用户能看清拖的是什么）
-        edge = ImageDraw.Draw(slider, "RGBA")
-        edge.rectangle(
-            [0, 0, self.slider_size - 1, self.slider_size - 1],
-            outline=(255, 255, 255, 220),
-            width=2,
-        )
+        hole = Image.new("L", bg.size, 0)
+        hole.paste(mask, (x, y))
+        bg = Image.composite(Image.new("RGB", bg.size, (20, 37, 46)), bg, hole.point(lambda v: round(v * .48)))
+        outline = Image.new("L", bg.size, 0)
+        outline.paste(edge.point(lambda v: round(v * .8)), (x, y))
+        bg = Image.composite(Image.new("RGB", bg.size, (255, 255, 255)), bg, outline)
 
         return {
             "bg": self._image_to_base64(bg),

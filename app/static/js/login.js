@@ -35,165 +35,294 @@ if (themeToggle) {
     });
 }
 
-// 滑动验证码逻辑
+// 点击登录才请求挑战；验证通过后提交原表单，密码不会发到验证码接口。
 function initSliderCaptcha() {
+    const form = document.getElementById('loginForm');
+    const dialog = document.getElementById('captchaDialog');
     const container = document.getElementById('captcha-container');
     const loginBtn = document.getElementById('loginBtn');
-    const captchaIdInput = document.getElementById('captcha_id');
-    const captchaXInput = document.getElementById('captcha_x');
-    const captchaTrailInput = document.getElementById('captcha_trail');
-    
-    if (!container) return;
+    const closeBtn = document.getElementById('captchaClose');
+    const refreshBtn = document.getElementById('captchaRefresh');
+    const status = document.getElementById('captchaStatus');
+    const idInput = document.getElementById('captcha_id');
+    const xInput = document.getElementById('captcha_x');
+    const trailInput = document.getElementById('captcha_trail');
+    if (!form || !dialog || !container) return;
 
-    let isVerified = false;
+    const arrow = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="m6 8 4 4-4 4m7-8 4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    let generation = 0;
+    let request = null;
+    let timer = null;
+    let phase = 'closed';
+    let verified = false;
+    let submitting = false;
+    let cancelDrag = null;
+
+    function clearProof() {
+        verified = false;
+        idInput.value = '';
+        xInput.value = '';
+        trailInput.value = '';
+    }
+
+    function setStatus(message, state = '') {
+        status.textContent = message;
+        dialog.dataset.state = state;
+    }
+
+    function invalidate() {
+        generation++;
+        request?.abort();
+        request = null;
+        clearTimeout(timer);
+        timer = null;
+        if (cancelDrag) cancelDrag();
+        cancelDrag = null;
+        clearProof();
+    }
+
+    function reset() {
+        invalidate();
+        phase = 'closed';
+        submitting = false;
+        container.replaceChildren();
+        container.setAttribute('aria-busy', 'false');
+        loginBtn.disabled = false;
+        loginBtn.textContent = '登 录';
+        document.body.classList.remove('captcha-open');
+    }
+
+    function closeDialog() {
+        if (submitting) return;
+        reset();
+        dialog.close();
+        loginBtn.focus();
+    }
+
+    function fail(message, ticket) {
+        if (ticket !== generation || !dialog.open) return;
+        if (phase === 'loading') {
+            container.innerHTML = '<div class="captcha-loading"><span aria-hidden="true">↻</span><span>暂时未能加载拼图</span></div>';
+        }
+        phase = 'error';
+        clearProof();
+        container.setAttribute('aria-busy', 'false');
+        refreshBtn.disabled = false;
+        container.querySelector('#sliderHandle')?.setAttribute('disabled', '');
+        container.querySelector('.slider-track')?.classList.add('slider-error');
+        setStatus(message, 'error');
+        // 保留失败反馈，由用户换图重试，不自动闪烁或不断请求验证码。
+        refreshBtn.focus();
+    }
 
     async function loadCaptcha() {
+        invalidate();
+        phase = 'loading';
+        const ticket = generation;
+        const controller = new AbortController();
+        request = controller;
+        refreshBtn.disabled = true;
+        container.setAttribute('aria-busy', 'true');
+        container.innerHTML = '<div class="captcha-loading"><span class="captcha-spinner" aria-hidden="true"></span><span>正在加载拼图</span></div>';
+        setStatus('正在加载拼图…');
+        timer = setTimeout(() => {
+            controller.abort();
+            fail('加载超时，请点击换一张重试', ticket);
+        }, 10000);
         try {
-            const res = await fetch('/api/auth/captcha');
-            const data = await res.json();
-            
-            renderSlider(data);
-        } catch (e) {
-            container.innerHTML = '<p style="color:red;font-size:12px;text-align:center;">验证码加载失败，请刷新页面</p>';
+            const response = await fetch('/api/auth/captcha', {signal: controller.signal, cache: 'no-store'});
+            if (!response.ok) throw new Error('load failed');
+            const data = await response.json();
+            const background = new Image();
+            const piece = new Image();
+            background.src = data.bg;
+            piece.src = data.slider;
+            await Promise.all([background.decode(), piece.decode()]);
+            if (ticket !== generation || !dialog.open || controller.signal.aborted) return;
+            clearTimeout(timer);
+            renderSlider(data, background, piece, ticket);
+        } catch (error) {
+            if (ticket !== generation || !dialog.open || controller.signal.aborted) return;
+            clearTimeout(timer);
+            fail('拼图加载失败，请点击换一张重试', ticket);
         }
     }
 
-    function renderSlider(data) {
-        container.innerHTML = `
-            <div class="slider-captcha">
-                <div class="slider-bg-container">
-                    <img src="${data.bg}" class="slider-bg-img">
-                    <img src="${data.slider}" class="slider-piece-img" id="sliderPiece" style="top: ${data.y}px">
-                </div>
-                <div class="slider-track" id="sliderTrack">
-                    <div class="slider-fill" id="sliderFill"></div>
-                    <div class="slider-text">向右滑动完成验证</div>
-                    <div class="slider-handle" id="sliderHandle">
-                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/></svg>
-                    </div>
-                </div>
+    function renderSlider(data, background, piece, ticket) {
+        const width = background.naturalWidth;
+        const height = background.naturalHeight;
+        const pieceWidth = piece.naturalWidth;
+        container.innerHTML = `<div class="slider-captcha">
+            <div class="slider-bg-container" id="sliderScene"></div>
+            <div class="slider-track" id="sliderTrack">
+                <div class="slider-fill" id="sliderFill"></div>
+                <span class="slider-text" id="sliderText">按住滑块，向右拖动</span>
+                <button type="button" class="slider-handle" id="sliderHandle" aria-label="向右拖动拼图滑块">${arrow}</button>
             </div>
-        `;
+        </div>`;
+        const scene = container.querySelector('#sliderScene');
+        const track = container.querySelector('#sliderTrack');
+        const handle = container.querySelector('#sliderHandle');
+        const fill = container.querySelector('#sliderFill');
+        const hint = container.querySelector('#sliderText');
+        scene.style.aspectRatio = `${width} / ${height}`;
+        background.className = 'slider-bg-img';
+        background.alt = '将拼图移到图片中的缺口';
+        background.draggable = false;
+        piece.className = 'slider-piece-img';
+        piece.id = 'sliderPiece';
+        piece.alt = '';
+        piece.draggable = false;
+        piece.style.width = `${pieceWidth / width * 100}%`;
+        piece.style.top = `${data.y / height * 100}%`;
+        scene.append(background, piece);
+        container.setAttribute('aria-busy', 'false');
+        phase = 'ready';
+        refreshBtn.disabled = false;
+        setStatus('验证通过后自动登录');
+        timer = setTimeout(() => fail('拼图已过期，请换一张后重试', ticket), 115000);
 
-        const handle = document.getElementById('sliderHandle');
-        const piece = document.getElementById('sliderPiece');
-        const track = document.getElementById('sliderTrack');
-        const fill = document.getElementById('sliderFill');
-        
+        let pointerId = null;
         let startX = 0;
-        let moveX = 0;
-        const maxMove = track.offsetWidth - handle.offsetWidth;
-        // 滑动轨迹：[[x, timeStamp], ...]
-        // 服务端据此判断是否由真人操作 —— 脚本直接设置 left 属性时，
-        // 轨迹要么为空，要么是一条完美的等速直线
+        let startedAt = 0;
+        let position = 0;
+        let travel = 0;
+        let trackWidth = 0;
         let trail = [];
-        const trailStart = Date.now();
 
-        function onDown(e) {
-            if (isVerified) return;
-            const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
-            startX = clientX;
-            trail = [[0, Date.now() - trailStart]];
-
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onEnd);
-            document.addEventListener('touchmove', onMove);
-            document.addEventListener('touchend', onEnd);
+        function releasePointer() {
+            if (pointerId !== null && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+            pointerId = null;
         }
+        cancelDrag = releasePointer;
 
-        function onMove(e) {
-            const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
-            moveX = clientX - startX;
-
-            if (moveX < 0) moveX = 0;
-            if (moveX > maxMove) moveX = maxMove;
-
-            handle.style.left = moveX + 'px';
-            piece.style.left = moveX + 'px';
-            fill.style.width = (moveX + 20) + 'px'; // 加上 handle 的一半左右，视觉更自然
-
-            // 记录轨迹，节流到每次移动都记（数据量小，一次拖动几十个点）
-            trail.push([Math.round(moveX), Date.now() - trailStart]);
-        }
-
-        async function onEnd() {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onEnd);
-            document.removeEventListener('touchmove', onMove);
-            document.removeEventListener('touchend', onEnd);
-
-            if (isVerified) return;
-
-            // 调用后端接口实时校验位置
-            try {
-                const res = await fetch('/api/auth/captcha/verify', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        id: data.id,
-                        x: Math.round(moveX),
-                        trail: trail
-                    })
-                });
-                const result = await res.json();
-
-                if (result.success) {
-                    // 校验成功
-                    isVerified = true;
-                    captchaIdInput.value = data.id;
-                    captchaXInput.value = Math.round(moveX);
-                    if (captchaTrailInput) {
-                        captchaTrailInput.value = JSON.stringify(trail);
-                    }
-                    
-                    track.classList.add('slider-success');
-                    // 验证成功后保持在当前滑动位置，不再铺满全长
-                    handle.innerHTML = '✔';
-                    handle.style.background = 'var(--primary)';
-                    loginBtn.disabled = false;
-                } else {
-                    // 校验失败，重置位置
-                    handle.style.transition = 'left 0.3s';
-                    piece.style.transition = 'left 0.3s';
-                    fill.style.transition = 'width 0.3s';
-                    handle.style.left = '0';
-                    piece.style.left = '0';
-                    fill.style.width = '0';
-                    
-                    // 抖动一下轨道
-                    track.classList.add('slider-error');
-                    setTimeout(() => {
-                        track.classList.remove('slider-error');
-                        handle.style.transition = '';
-                        piece.style.transition = '';
-                        fill.style.transition = '';
-                    }, 300);
-                    
-                    moveX = 0;
-                    captchaIdInput.value = '';
-                    captchaXInput.value = '';
-                    // 失败凭证已经销毁，获取新的图片和验证码ID。
-                    setTimeout(loadCaptcha, 350);
-                }
-            } catch (e) {
-                console.error('Verify failed:', e);
-                // 网络错误重置
-                handle.style.left = '0';
-                piece.style.left = '0';
-                fill.style.width = '0';
-                moveX = 0;
-                loadCaptcha();
+        function move(clientX) {
+            const distance = Math.max(0, Math.min(travel, clientX - startX));
+            position = Math.round(distance / travel * (width - pieceWidth));
+            handle.style.transform = `translateX(${distance}px)`;
+            // 屏幕缩放/窄屏都按原图坐标提交，与实际拼图位置保持一致。
+            piece.style.left = `${position / width * 100}%`;
+            fill.style.width = `${distance + handle.offsetWidth}px`;
+            const point = [position, Math.round(performance.now() - startedAt)];
+            if (point[1] > trail[trail.length - 1][1]) {
+                if (trail.length >= 1900) trail = trail.filter((_, index) => index % 2 === 0);
+                trail.push(point);
             }
         }
 
-        handle.addEventListener('mousedown', onDown);
-        handle.addEventListener('touchstart', onDown, { passive: true });
+        handle.addEventListener('pointerdown', event => {
+            if (phase !== 'ready' || !event.isPrimary || event.button !== 0) return;
+            event.preventDefault();
+            phase = 'dragging';
+            pointerId = event.pointerId;
+            startX = event.clientX;
+            startedAt = performance.now();
+            position = 0;
+            trail = [[0, 0]];
+            trackWidth = track.clientWidth;
+            travel = trackWidth - handle.offsetWidth;
+            if (travel <= 0) { fail('显示尺寸已变化，请换一张重试', ticket); return; }
+            track.classList.add('is-dragging');
+            refreshBtn.disabled = true;
+            hint.textContent = '对齐缺口后松开';
+            handle.setPointerCapture(pointerId);
+        });
+
+        handle.addEventListener('pointermove', event => {
+            if (phase !== 'dragging' || event.pointerId !== pointerId) return;
+            move(event.clientX);
+        });
+
+        async function verify() {
+            phase = 'verifying';
+            clearTimeout(timer);
+            handle.disabled = true;
+            track.classList.remove('is-dragging');
+            hint.textContent = '正在验证…';
+            setStatus('正在验证，请稍候');
+            const controller = new AbortController();
+            request = controller;
+            timer = setTimeout(() => {
+                controller.abort();
+                fail('验证超时，请换一张重试', ticket);
+            }, 10000);
+            try {
+                const response = await fetch('/api/auth/captcha/verify', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: data.id, x: position, trail}), signal: controller.signal,
+                });
+                if (!response.ok) throw new Error('verify failed');
+                const result = await response.json();
+                if (ticket !== generation || !dialog.open || controller.signal.aborted) return;
+                clearTimeout(timer);
+                if (!result.success) {
+                    hint.textContent = '请换一张后重试';
+                    fail(result.message || '没有对齐，请换一张重试', ticket);
+                    return;
+                }
+                phase = 'verified';
+                verified = true;
+                idInput.value = data.id;
+                xInput.value = String(position);
+                trailInput.value = JSON.stringify(trail);
+                track.classList.add('slider-success');
+                handle.textContent = '✓';
+                hint.textContent = '验证通过';
+                setStatus('验证通过，正在登录…', 'success');
+                timer = setTimeout(() => {
+                    if (ticket !== generation || !dialog.open) return;
+                    if (!form.checkValidity()) { closeDialog(); form.reportValidity(); return; }
+                    form.requestSubmit();
+                }, 350);
+            } catch (error) {
+                if (ticket !== generation || !dialog.open || controller.signal.aborted) return;
+                clearTimeout(timer);
+                hint.textContent = '请换一张后重试';
+                fail('网络连接失败，请换一张重试', ticket);
+            }
+        }
+
+        handle.addEventListener('pointerup', event => {
+            if (phase !== 'dragging' || event.pointerId !== pointerId) return;
+            if (Math.abs(track.clientWidth - trackWidth) > 1) {
+                releasePointer();
+                fail('窗口尺寸已变化，请换一张重试', ticket);
+                return;
+            }
+            move(event.clientX);
+            releasePointer();
+            verify();
+        });
+        handle.addEventListener('pointercancel', () => {
+            if (phase !== 'dragging') return;
+            releasePointer();
+            fail('拖动已取消，请换一张重试', ticket);
+        });
     }
 
-    loadCaptcha();
+    form.addEventListener('submit', event => {
+        if (submitting) { event.preventDefault(); return; }
+        if (verified) {
+            submitting = true;
+            loginBtn.disabled = true;
+            loginBtn.textContent = '正在登录…';
+            refreshBtn.disabled = true;
+            closeBtn.disabled = true;
+            return;
+        }
+        event.preventDefault();
+        if (!form.reportValidity() || dialog.open) return;
+        dialog.showModal();
+        document.body.classList.add('captcha-open');
+        loadCaptcha();
+    });
+    refreshBtn.addEventListener('click', loadCaptcha);
+    closeBtn.addEventListener('click', closeDialog);
+    dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
+    dialog.addEventListener('close', () => { if (!submitting) reset(); });
+    window.addEventListener('pageshow', event => {
+        if (event.persisted) { submitting = false; reset(); closeBtn.disabled = false; dialog.close(); }
+    });
 }
 
-// 页面加载初始化
-document.addEventListener('DOMContentLoaded', () => {
-    initSliderCaptcha();
-});
+document.addEventListener('DOMContentLoaded', initSliderCaptcha);

@@ -29,6 +29,8 @@ body.dark-mode {
     justify-content: center;
     align-items: center;
     min-height: 100vh;
+    min-height: 100dvh;
+    padding: 24px 16px;
     margin: 0;
     background: var(--login-bg);
     transition: background 0.3s;
@@ -36,19 +38,24 @@ body.dark-mode {
 
 .login-container {
     background: var(--card-bg);
-    padding: 40px;
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    padding: 36px 32px;
+    border-radius: 20px;
+    box-shadow: 0 16px 48px rgba(15, 23, 42, 0.10);
+    border: 1px solid var(--input-border);
     width: 100%;
-    max-width: 400px;
+    max-width: 420px;
     position: relative;
     transition: background 0.3s, box-shadow 0.3s;
 }
 
 .theme-toggle {
     position: absolute;
-    top: 20px;
-    right: 20px;
+    right: 16px;
+    top: 16px;
+    bottom: auto;
+    width: 34px;
+    height: 34px;
+    z-index: auto;
     cursor: pointer;
     padding: 8px;
     border-radius: 50%;
@@ -67,12 +74,13 @@ body.dark-mode {
 
 .login-header {
     text-align: center;
-    margin-bottom: 30px;
+    margin-bottom: 28px;
+    padding-top: 18px;
 }
 
 .login-header h1 {
     color: var(--primary);
-    font-size: 1.8rem;
+    font-size: 1.55rem;
     margin: 0 0 10px 0;
 }
 
@@ -111,18 +119,6 @@ body.dark-mode {
     box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
 }
 
-#captcha {
-    margin-bottom: 20px;
-    width: 100%;
-    display: flex;
-    justify-content: center;
-    min-height: 50px;
-}
-
-#captcha > * {
-    width: 100% !important;
-}
-
 .btn-login {
     width: 100%;
     padding: 14px;
@@ -152,130 +148,64 @@ body.dark-mode {
     box-shadow: none;
 }
 
-/* 滑动验证码样式 */
-#captcha-container {
-    user-select: none;
-    position: relative;
-}
-
-.slider-captcha {
-    width: 310px;
-    margin: 0 auto;
-}
-
-.slider-bg-container {
-    position: relative;
-    width: 310px;
-    height: 155px;
-    background: #eee;
-    overflow: hidden;
-    border-radius: 4px;
-}
-
-.slider-bg-img {
-    width: 310px;
-    height: 155px;
-    display: block;
-}
-
-.slider-piece-img {
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 10;
-    width: 50px;
-    height: 50px;
-    filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
-}
-
-.slider-track {
-    position: relative;
-    width: 310px;
-    height: 40px;
-    background: var(--input-bg);
+/* 验证弹窗只在用户点击登录后显示，由 dialog 管理焦点与背景隔离。 */
+body.captcha-open { overflow: hidden; }
+.captcha-dialog {
+    margin: auto;
+    width: min(374px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    padding: 24px;
     border: 1px solid var(--input-border);
     border-radius: 20px;
-    margin-top: 15px;
-    overflow: hidden; /* 确保填充层不超出圆角 */
+    background: var(--card-bg);
+    color: var(--text-main);
+    box-shadow: 0 24px 80px rgba(15, 23, 42, .24);
+    overflow-y: auto;
 }
-
-.slider-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 0;
-    height: 100%;
-    background: #dcfce7; /* 浅绿色背景，完全不透明以盖住文字 */
-    border-right: 2px solid var(--primary);
-    transition: background 0.2s;
-    z-index: 2; /* 位于文字之上 */
+.captcha-dialog::backdrop { background: rgba(15, 23, 42, .40); backdrop-filter: blur(4px); }
+.captcha-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.captcha-header h2 { margin: 0 0 5px; font-size: 19px; font-weight: 650; letter-spacing: .02em; }
+.captcha-header p { margin: 0; color: var(--text-sub); font-size: 13px; }
+.captcha-close { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; color: var(--text-sub); background: transparent; cursor: pointer; }
+.captcha-close:hover { color: var(--text-main); background: var(--input-bg); }
+.captcha-close:focus-visible, .captcha-refresh:focus-visible, .slider-handle:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+#captcha-container { user-select: none; -webkit-user-select: none; position: relative; min-height: 210px; }
+.slider-captcha { width: 100%; }
+.slider-bg-container { position: relative; width: 100%; aspect-ratio: 2; overflow: hidden; border-radius: 12px; background: var(--input-bg); isolation: isolate; }
+.slider-bg-img { display: block; width: 100%; height: auto; pointer-events: none; }
+.slider-piece-img { position: absolute; left: 0; height: auto; z-index: 1; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(15,23,42,.35)); }
+.slider-track { position: relative; width: 100%; height: 48px; margin-top: 16px; border: 1px solid var(--input-border); border-radius: 12px; background: var(--input-bg); touch-action: none; }
+.slider-fill { position: absolute; inset: 0 auto 0 0; width: 0; max-width: 100%; border-radius: 11px; background: rgba(34,197,94,.12); pointer-events: none; }
+.slider-text { position: absolute; inset: 0 0 0 42px; display: flex; align-items: center; justify-content: center; color: var(--text-sub); font-size: 13px; pointer-events: none; transition: opacity .15s; }
+.slider-track.is-dragging .slider-text { opacity: .45; }
+.slider-handle { position: absolute; top: 0; left: 0; width: 46px; height: 46px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 11px; background: var(--primary); color: var(--btn-text); box-shadow: 0 2px 6px rgba(22,163,74,.18); cursor: grab; touch-action: none; font-size: 22px; }
+.slider-handle:active { cursor: grabbing; background: var(--primary-hover); }
+.slider-handle:disabled { cursor: default; }
+.slider-success { border-color: var(--primary); }
+.slider-success .slider-text { color: var(--primary-hover); }
+.slider-error { border-color: #ef4444; }
+.slider-error .slider-fill { background: rgba(239,68,68,.08); }
+.slider-error .slider-handle { background: #94a3b8; }
+.captcha-footer { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-top: 16px; }
+.captcha-footer p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-sub); min-height: 20px; }
+.captcha-dialog[data-state="error"] .captcha-footer p { color: #dc2626; }
+.captcha-dialog[data-state="success"] .captcha-footer p { color: var(--primary-hover); }
+.captcha-refresh { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; padding: 0; border: 0; background: transparent; color: var(--text-sub); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
+.captcha-refresh:hover { color: var(--primary-hover); }
+.captcha-refresh:disabled { opacity: .45; cursor: default; }
+.captcha-loading { min-height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border-radius: 12px; background: var(--input-bg); color: var(--text-sub); font-size: 13px; }
+.captcha-spinner { width: 23px; height: 23px; border: 2px solid var(--input-border); border-top-color: var(--primary); border-radius: 50%; animation: captcha-spin .7s linear infinite; }
+.login-noscript { position: fixed; bottom: 16px; padding: 10px; background: var(--card-bg); color: #dc2626; }
+@keyframes captcha-spin { to { transform: rotate(360deg); } }
+@media (max-width: 420px) {
+    .login-container { padding: 32px 24px; border-radius: 16px; }
+    .login-header h1 { font-size: 1.4rem; }
+    .captcha-dialog { padding: 20px; border-radius: 16px; }
+    #captcha-container { min-height: 180px; }
 }
-
-body.dark-mode .slider-fill {
-    background: #064e3b; /* 深色模式下的覆盖背景 */
-}
-
-.slider-handle {
-    position: absolute;
-    top: -1px;
-    left: 0;
-    width: 40px;
-    height: 40px;
-    background: var(--primary);
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    z-index: 20;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    transition: background 0.2s;
-}
-
-.slider-handle:hover {
-    background: var(--primary-hover);
-}
-
-.slider-text {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    color: var(--text-sub);
-    position: relative;
-    z-index: 1; /* 位于最底层 */
-}
-
-.slider-success {
-    border-color: var(--primary);
-}
-
-.slider-success .slider-fill {
-    background: var(--primary); /* 成功后变为深绿色 */
-    border-right: none;
-}
-
-.slider-success .slider-handle {
-    background: var(--primary);
-}
-
-.slider-error {
-    animation: shake 0.3s ease-in-out;
-    border-color: #ef4444;
-}
-
-.slider-error .slider-fill {
-    background: rgba(239, 68, 68, 0.1);
-    border-right-color: #ef4444;
-}
-
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    20%, 60% { transform: translateX(-5px); }
-    40%, 80% { transform: translateX(5px); }
+@media (prefers-reduced-motion: reduce) {
+    .captcha-spinner { animation: none; }
+    .btn-login, .slider-text { transition: none; }
 }
 
 .error-message {
