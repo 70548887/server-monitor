@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, Query
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 
-from ..services.config import get_config, NodeConfig, NodeExpectConfig
+from ..services.config import get_config, NodeConfig
 from ..services.observability import metrics
 from ..services.scheduler import get_scheduler
 
@@ -37,22 +37,8 @@ async def _get_nodes_from_db() -> list:
     repo = _get_db_repository()
     if repo:
         try:
-            db_nodes = await repo.get_all_nodes()
-            nodes = []
-            for n in db_nodes:
-                nodes.append(NodeConfig(
-                    name=n["name"],
-                    url=n["url"],
-                    region=n.get("region", "default"),
-                    tags=n.get("tags", []),
-                    timeout_ms=n.get("timeout_ms", 2000),
-                    enabled=n.get("enabled", True),
-                    expect=NodeExpectConfig(
-                        status=n.get("expect_status", 200),
-                        body_contains=n.get("expect_body_contains"),
-                    ),
-                ))
-            return nodes
+            db_nodes = await repo.get_all_nodes(strict=True)
+            return [NodeConfig.from_database(n) for n in db_nodes]
         except Exception as e:
             logger.error(f"从数据库获取节点失败: {e}")
     

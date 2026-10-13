@@ -572,12 +572,13 @@ class MySQLRepository:
             return 0
 
     # ============= 节点 CRUD 操作 =============    
-    async def get_all_nodes(self, include_deleted: bool = False) -> List[dict]:
+    async def get_all_nodes(self, include_deleted: bool = False, *, strict: bool = False) -> List[dict]:
         """
         获取所有节点
         
         Args:
             include_deleted: 是否包含已删除的节点
+            strict: 查询失败时抛出异常，供需要区分空库与故障的调用方使用
         
         Returns:
             节点字典列表
@@ -596,12 +597,16 @@ class MySQLRepository:
                 f"Failed to get all nodes: include_deleted={include_deleted}, "
                 f"error_type={type(e).__name__}, error={e}"
             )
-            return []  # 返回空列表，避免影响上层逻辑
+            if strict:
+                raise
+            return []  # 兼容允许空列表降级的只读调用方
         except Exception as e:
             logger.error(
                 f"Unexpected error getting nodes: "
                 f"error_type={type(e).__name__}, error={e}"
             )
+            if strict:
+                raise
             return []
     
     async def get_node_by_name(self, name: str) -> Optional[dict]:

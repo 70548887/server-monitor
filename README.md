@@ -301,12 +301,17 @@ python -m pytest tests/test_browser.py
 `datetime.now(timezone.utc)` 写库——带时区的对象与已有朴素数据
 混用会产生 8 小时偏差。
 
+## 节点配置重载
+
+`POST /api/nodes/reload` 需要登录，从数据库刷新运行时节点配置和状态缓存，返回
+`count`、`enabled_count` 和 `source: "database"`。它不导入 `nodes.yaml`，不触发额外检测或通知；
+调度器在下一轮读取最新配置。同一URL的最近检测结果保留，更换URL后重置，数据库已删除的节点从缓存移除。
+空库会清空配置缓存；数据库读取或配置校验失败时返回503，原配置和缓存保持不变。
+
 ## 已知限制
 
-- **未接线的 API**：9 个后端端点前端未调用。其中
-  `/api/auth/change-password` 是设置页表单的重复实现（表单已可用），
-  `/api/nodes/reload` 重载的 `nodes.yaml` 不驱动任何逻辑
-  （系统以数据库为主数据源），故未接入 UI
+- **界面入口**：`/api/auth/change-password` 是设置页表单的重复实现（表单已可用）；
+  `/api/nodes/reload` 是已登录管理员使用的配置重载接口，尚无单独按钮。
 - **时区约定未统一**：4 个时间字段分属 UTC 与本地两种约定
   （详见[时间约定](#时间约定)）。当前各表内部自洽、显示正确，
   但跨表按时间关联查询需先换算。统一需迁移 4.2 万行数据
