@@ -112,3 +112,49 @@ async def test_bootstrap_upgrades_legacy_schema_idempotently(mysql_store, monkey
     assert await bootstrap_database.run_phase2_migration(get_config()) == 0
     async with engine.connect() as conn:
         assert (await conn.execute(text("SELECT ENGINE FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='alert_incidents'"))).scalar_one() == "InnoDB"
+
+
+async def test_database_node_reload_and_next_probe(mysql_store, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.models.node import NodeModel
+    from app.routes import nodes, ui
+    from app.schemas.node import NodeStatus
+    from app.services.config import AppConfig, NodeConfig
+    from app.services.scheduler import SchedulerService
+    from test_routes import make_authed_client
+
+    _, sessions, repo = mysql_store
+    async with sessions() as s:
+        s.add_all([
+            NodeModel(name="db-active", url="http://test.invalid/health", timeout_ms=4500,
+                      expect_status=202, expect_body_contains="ready", region="new", tags=["db"], enabled=True),
+            NodeModel(name="db-disabled", url="http://test.invalid/disabled", enabled=False),
+            NodeModel(name="db-deleted", url="http://test.invalid/deleted", deleted_at=datetime(2026, 10, 13)),
+        ])
+        await s.commit()
+    cfg = AppConfig(nodes=[NodeConfig("yaml-only", "http://example.invalid")])
+    old = NodeStatus(name="db-active", url="http://test.invalid/health", region="old", tags=[], enabled=True, last_latency_ms=19)
+    monkeypatch.setattr(nodes, "_node_status_cache", {"db-active": old, "removed": old.model_copy(update={"name":"removed"})})
+    monkeypatch.setattr(nodes, "get_config", lambda: cfg)
+    monkeypatch.setattr(nodes, "_get_db_repository", lambda: repo)
+    monkeypatch.setattr(ui, "_get_db_repository", lambda: repo)
+    monkeypatch.setattr("app.repositories.mysql_repository.get_mysql_repository", lambda: repo)
+    monkeypatch.setattr("app.services.scheduler.get_config", lambda: cfg)
+    async with make_authed_client(monkeypatch) as client:
+        response = await client.post("/api/nodes/reload")
+        assert response.status_code == 200
+        assert response.json()["count"] == 2
+        assert response.json()["enabled_count"] == 1
+        listed = (await client.get("/api/nodes")).json()
+        assert {n["name"] for n in listed} == {"db-active", "db-disabled"}
+        status = nodes._node_status_cache["db-active"]
+        assert status.last_latency_ms == 19 and status.region == "new"
+        assert "removed" not in nodes._node_status_cache
+        page = await client.get("/ui/nodes/db-active")
+        assert page.status_code == 200 and "202" in page.text and "ready" in page.text
+    heartbeat = SimpleNamespace(check_nodes=AsyncMock(return_value=[]))
+    await SchedulerService(heartbeat_service=heartbeat).run_once()
+    targets = heartbeat.check_nodes.call_args.kwargs["nodes"]
+    assert len(targets) == 1
+    assert (targets[0].name, targets[0].timeout_ms, targets[0].expect.status, targets[0].expect.body_contains) == ("db-active",4500,202,"ready")

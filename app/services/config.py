@@ -165,6 +165,21 @@ class NodeConfig:
     enabled: bool = True
     expect: NodeExpectConfig = field(default_factory=NodeExpectConfig)
 
+    @classmethod
+    def from_database(cls, data: dict) -> "NodeConfig":
+        """校验数据库节点快照，保留 ORM 输出的嵌套 expect 检测条件。"""
+        from ..schemas.node import NodeConfig as NodeSchema
+
+        values = dict(data)
+        if "expect" not in values:
+            values["expect"] = {
+                "status": values.get("expect_status", 200),
+                "body_contains": values.get("expect_body_contains"),
+            }
+        validated = NodeSchema.model_validate(values).model_dump()
+        expect = NodeExpectConfig(**validated.pop("expect"))
+        return cls(**validated, expect=expect)
+
 
 @dataclass
 class AppConfig:

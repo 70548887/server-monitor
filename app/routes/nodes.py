@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from ..schemas.node import NodeConfig, NodeStatus, NodeCreate, NodeUpdate, NodeExpect
-from ..services.config import get_config, reload_nodes
+from ..services.config import get_config, NodeConfig as RuntimeNodeConfig
 from ..services.scheduler import get_scheduler
 from ..services.availability import get_availability_service, AvailabilityService
 
@@ -413,23 +413,11 @@ async def ping_node(name: str):
     
     # 执行心跳检测
     from ..services.heartbeat import HeartbeatService
-    from ..services.config import NodeConfig as ConfigNode, NodeExpectConfig
     
     service = HeartbeatService()
     
     try:
-        result = await service.check_node(ConfigNode(
-            name=node["name"],
-            url=node["url"],
-            region=node.get("region", "default"),
-            tags=node.get("tags", []),
-            timeout_ms=node.get("timeout_ms", 2000),
-            enabled=True,
-            expect=NodeExpectConfig(
-                status=node.get("expect_status", 200),
-                body_contains=node.get("expect_body_contains"),
-            ),
-        ))
+        result = await service.check_node(RuntimeNodeConfig.from_database({**node, "enabled": True}))
         
         # 更新缓存状态
         cached = _get_node_status(name) or NodeStatus(
@@ -465,23 +453,45 @@ async def ping_node(name: str):
 
 @router.post("/reload")
 async def reload_node_config():
-    """
-    热重载节点配置
-    
-    从 nodes.yaml 文件重新加载节点列表。
-    """
+    """从数据库刷新节点配置与状态缓存；不触发探测或导入 YAML。"""
+    global _node_status_cache
+
+    repo = _get_db_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="数据库不可用，节点配置未重载")
     try:
-        nodes = reload_nodes()
-        return {
-            "message": "Nodes reloaded successfully",
-            "count": len(nodes),
-        }
-    except Exception as e:
-        logger.error(f"重新加载节点失败: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "E006", "message": f"Failed to reload: {str(e)}"},
-        )
+        # strict 区分空库和查询失败：失败不能清空当前配置。
+        rows = await repo.get_all_nodes(strict=True)
+        nodes = [RuntimeNodeConfig.from_database(row) for row in rows]
+        if len({n.name for n in nodes}) != len(nodes):
+            raise ValueError("数据库快照包含重复节点名称")
+
+        refreshed = {}
+        for node in nodes:
+            cached = _get_node_status(node.name)
+            fields = dict(name=node.name, url=node.url, region=node.region,
+                          tags=list(node.tags), enabled=node.enabled)
+            if cached is not None and cached.url == node.url:
+                # 配置以数据库为准；同一检测地址的实时状态继续保留。
+                refreshed[node.name] = cached.model_copy(update=fields, deep=True)
+            else:
+                # 新节点或更换地址的节点，不沿用旧目标的检测结果。
+                refreshed[node.name] = NodeStatus(**fields)
+        config = get_config()
+    except Exception as exc:
+        logger.error("数据库节点重载失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="读取节点配置失败，原配置保持不变") from exc
+
+    # 全部校验通过后一次发布，两次赋值间没有 await。
+    config.nodes = nodes
+    _node_status_cache = refreshed
+    logger.info("已从数据库重载 %s 个节点", len(nodes))
+    return {
+        "message": "节点配置已从数据库重载，下轮检测使用最新配置",
+        "count": len(nodes),
+        "enabled_count": sum(node.enabled for node in nodes),
+        "source": "database",
+    }
 
 
 # 供其他模块更新节点状态
