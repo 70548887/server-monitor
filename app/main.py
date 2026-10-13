@@ -48,6 +48,7 @@ from app.services.auth import create_default_admin
 from app.routes import health_router, nodes_router, metrics_router, ui_router
 from app.routes.auth import router as auth_router
 from app.routes.notifications import router as notifications_router
+from app.routes.updates import router as updates_router
 from app.routes.nodes import update_node_status_from_result
 from app.middleware.auth import AuthMiddleware
 from app.middleware.security import SecurityMiddleware, TrustedHostMiddleware
@@ -475,6 +476,7 @@ app.include_router(health_router)
 app.include_router(nodes_router)
 app.include_router(metrics_router)
 app.include_router(notifications_router)  # 通知渠道路由
+app.include_router(updates_router)
 app.include_router(ui_router)
 
 
