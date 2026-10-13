@@ -13,19 +13,16 @@ Group=servermon
 WorkingDirectory=/opt/server-monitor
 
 Environment="PYTHONUNBUFFERED=1"
-# 从 /opt/server-monitor/.env 读取，不设则配置文件与凭据都不会加载
-EnvironmentFile=/opt/server-monitor/.env
+# 管理器在每次启动子进程时重新读取项目 .env，使界面重启能加载修改后的配置。
+# 此处不要使用 EnvironmentFile 缓存同一文件；显式 Environment 参数仍优先。
 
 # 生产环境必须启用 secure Cookie（配合 nginx 的 HTTPS）
 Environment="COOKIE_SECURE=true"
 Environment="ALLOWED_HOSTS=monitor.example.com"
 
-ExecStart=/opt/server-monitor/.venv/bin/uvicorn app.main:app \
+ExecStart=/opt/server-monitor/.venv/bin/python scripts/run_server.py \
     --host 127.0.0.1 \
-    --port 8080 \
-    --workers 1 \
-    --proxy-headers \
-    --forwarded-allow-ips='127.0.0.1'
+    --port 8080
 
 # 优雅停机：等待进行中的请求完成，避免告警邮件发一半被切断
 KillSignal=SIGTERM
@@ -34,12 +31,12 @@ Restart=always
 RestartSec=5
 
 # ---------- 安全加固 ----------
-# 服务只需读代码、写日志
+# 在线升级需写项目内程序、备份和独立依赖环境；其他系统目录仍保持只读。
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/server-monitor/logs /opt/server-monitor/configs
+ReadWritePaths=/opt/server-monitor
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

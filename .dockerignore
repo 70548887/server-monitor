@@ -67,3 +67,5 @@ Thumbs.db
 # 文档
 README.md
 CHANGELOG.md
+# 在线升级备份与独立依赖环境不得进入构建上下文
+.updates/

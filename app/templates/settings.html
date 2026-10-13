@@ -9,8 +9,8 @@
 {% block content %}
 <div class="settings-page">
     <div class="page-header">
-        <h1>账户设置</h1>
-        <p class="subtitle">管理您的账户信息和安全设置</p>
+        <h1>设置</h1>
+        <p class="subtitle">管理账户、安全与系统版本</p>
     </div>
     
     {% if success %}
@@ -31,6 +31,37 @@
     </div>
     {% endif %}
     
+    <section class="settings-card" id="systemUpdate" aria-labelledby="updateTitle">
+        <div class="card-header">
+            <h2 class="card-title" id="updateTitle">系统更新</h2>
+            <span class="update-repo">GitHub · server-monitor</span>
+        </div>
+        <div class="update-versions">
+            <div><span class="label">当前版本</span><strong id="updateCurrent">正在读取…</strong></div>
+            <div><span class="label">最新版本</span><strong id="updateLatest">尚未检查</strong></div>
+        </div>
+        <p id="updateMessage" role="status" aria-live="polite">正在读取升级状态…</p>
+        <progress id="updateProgress" max="100" value="0" hidden aria-label="升级进度"></progress>
+        <p id="updateCapability" class="settings-form-hint"></p>
+        <div class="update-actions">
+            <button type="button" class="btn-save" id="updateCheck">检查更新</button>
+            <button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button>
+            <button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button>
+            <button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button>
+        </div>
+        <details id="updateRelease" hidden>
+            <summary>查看更新说明</summary>
+            <pre id="updateNotes"></pre>
+            <a id="updateReleaseLink" target="_blank" rel="noopener noreferrer">在 GitHub 查看版本</a>
+        </details>
+        <div class="update-backup-header">
+            <h3>程序备份</h3>
+            <button type="button" class="btn btn-secondary" id="updateBackup">创建备份</button>
+        </div>
+        <p class="settings-form-hint">应用更新前自动备份。备份仅包含程序和依赖环境信息，不包含数据库、账号密码和自定义配置；回滚不会恢复数据库结构。</p>
+        <ul id="updateBackups" class="update-backups"><li>正在读取备份…</li></ul>
+    </section>
+
     <!-- 账户信息卡片 -->
     <div class="settings-card">
         <div class="card-header">
@@ -185,4 +216,5 @@
 
 {% block scripts %}
 <script src="/static/js/settings.js"></script>
+<script src="/static/js/updates.js?v=1"></script>
 {% endblock %}

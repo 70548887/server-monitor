@@ -32,6 +32,7 @@ FROM python:3.12-slim
 # 时区：告警按本地时刻展示（静默时段、发送时段均为本地时间）
 # UTC+8 对应 Asia/Shanghai
 ENV TZ=Asia/Shanghai \
+    MONITOR_DEPLOYMENT=docker \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
