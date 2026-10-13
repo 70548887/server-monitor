@@ -17,6 +17,7 @@ SESSION_COOKIE_NAME = "session_id"
 # 判断服务存活。调度器状态同属健康信息，与 /healthz 保持一致。
 PUBLIC_PATHS = {
     "/login",
+    "/favicon.ico",
     "/api/auth/captcha",
     "/api/auth/captcha/verify",
     "/healthz",
