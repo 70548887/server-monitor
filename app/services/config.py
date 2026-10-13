@@ -200,7 +200,7 @@ def publish_node_snapshot(config, nodes):
 class AppConfig:
     """应用配置"""
     name: str = "server-monitor"
-    version: str = "1.0.1"
+    version: str = "1.1.0"
     debug: bool = False
     
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -299,7 +299,7 @@ def load_config(
         # 应用信息
         app_info = app_data.get("app", {})
         config.name = app_info.get("name", "server-monitor")
-        config.version = app_info.get("version", "1.0.1")
+        config.version = app_info.get("version", "1.1.0")
         config.debug = app_info.get("debug", False)
         
         # 数据库配置

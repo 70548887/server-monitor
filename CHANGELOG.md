@@ -5,6 +5,10 @@
 
 ## [未发布]
 
+## [1.1.0] - 2026-10-13
+
+在线升级与运行可靠性版本，包含节点数据库重载、登录交互优化和审核修复。
+
 ### 新增
 
 - 设置页增加在线升级：GitHub正式版本检查、SHA256校验下载、程序备份、升级进度、回滚和重启。
@@ -132,7 +136,8 @@
 
 仅用于追溯起点。
 
-[未发布]: https://github.com/70548887/server-monitor/compare/v1.0.1...master
+[未发布]: https://github.com/70548887/server-monitor/compare/v1.1.0...master
+[1.1.0]: https://github.com/70548887/server-monitor/releases/tag/v1.1.0
 [1.0.1]: https://github.com/70548887/server-monitor/releases/tag/v1.0.1
 [1.0.0]: https://github.com/70548887/server-monitor/tree/v1.0.0
 [0.1.0-pre]: https://github.com/70548887/server-monitor/tree/v0.1.0-pre
