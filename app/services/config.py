@@ -2,6 +2,7 @@
 
 import os
 import logging
+import uuid
 from pathlib import Path
 from typing import Optional, Any
 from dataclasses import dataclass, field
@@ -164,6 +165,10 @@ class NodeConfig:
     timeout_ms: int = 2000
     enabled: bool = True
     expect: NodeExpectConfig = field(default_factory=NodeExpectConfig)
+    probe_revision: str = field(default_factory=lambda: uuid.uuid4().hex, init=False, repr=False, compare=False)
+
+    def probe_key(self):
+        return (self.url, self.enabled, self.timeout_ms, self.expect.status, self.expect.body_contains)
 
     @classmethod
     def from_database(cls, data: dict) -> "NodeConfig":
@@ -171,7 +176,7 @@ class NodeConfig:
         from ..schemas.node import NodeConfig as NodeSchema
 
         values = dict(data)
-        if "expect" not in values:
+        if values.get("expect") is None:
             values["expect"] = {
                 "status": values.get("expect_status", 200),
                 "body_contains": values.get("expect_body_contains"),
@@ -179,6 +184,16 @@ class NodeConfig:
         validated = NodeSchema.model_validate(values).model_dump()
         expect = NodeExpectConfig(**validated.pop("expect"))
         return cls(**validated, expect=expect)
+
+
+def publish_node_snapshot(config, nodes):
+    """检测条件不变时延续版本；改地址、停用、删后重建等让旧请求结果失效。"""
+    previous = {node.name: node for node in config.nodes}
+    for node in nodes:
+        old = previous.get(node.name)
+        if old is not None and old.probe_key() == node.probe_key():
+            node.probe_revision = old.probe_revision
+    config.nodes = nodes
 
 
 @dataclass

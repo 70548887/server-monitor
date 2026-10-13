@@ -49,7 +49,7 @@ from app.routes import health_router, nodes_router, metrics_router, ui_router
 from app.routes.auth import router as auth_router
 from app.routes.notifications import router as notifications_router
 from app.routes.updates import router as updates_router
-from app.routes.nodes import update_node_status_from_result
+from app.routes.nodes import update_node_status_from_result, result_is_current
 from app.middleware.auth import AuthMiddleware
 from app.middleware.security import SecurityMiddleware, TrustedHostMiddleware
 
@@ -285,9 +285,8 @@ async def lifespan(app: FastAPI):
         records = []
         samples_to_save = []
         
+        results = [r for r in results if update_node_status_from_result(r.node_name, r)]
         for r in results:
-            # 更新节点状态缓存
-            update_node_status_from_result(r.node_name, r)
             # 创建可用性记录
             records.append(HeartbeatRecord(
                 node_name=r.node_name,
@@ -329,7 +328,9 @@ async def lifespan(app: FastAPI):
             alerting_service = get_alerting_service()
             
             # 评估所有心跳结果，检查是否需要触发告警
-            alert_events = await alerting_service.evaluate_batch(results)
+            alert_events = await alerting_service.evaluate_batch(
+                [r for r in results if result_is_current(r.node_name, r)]
+            )
             
             if alert_events:
                 logger.info(f"触发了 {len(alert_events)} 个告警: {[e.alert_type for e in alert_events]}")

@@ -305,6 +305,8 @@ class RuntimeStore:
         return manifest
 
     def ensure_idle(self):
+        if (self.home / "transaction.json").exists():
+            raise UpdateBusy("存在未恢复的升级事务，请重新启动管理器完成恢复")
         if (self.home / "command.json").exists() or self.read().get("state") in BUSY:
             raise UpdateBusy("已有升级操作正在进行")
 

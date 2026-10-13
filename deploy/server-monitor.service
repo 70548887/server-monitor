@@ -13,8 +13,8 @@ Group=servermon
 WorkingDirectory=/opt/server-monitor
 
 Environment="PYTHONUNBUFFERED=1"
-# 从 /opt/server-monitor/.env 读取，不设则配置文件与凭据都不会加载
-EnvironmentFile=/opt/server-monitor/.env
+# 管理器在每次启动子进程时重新读取项目 .env，使界面重启能加载修改后的配置。
+# 此处不要使用 EnvironmentFile 缓存同一文件；显式 Environment 参数仍优先。
 
 # 生产环境必须启用 secure Cookie（配合 nginx 的 HTTPS）
 Environment="COOKIE_SECURE=true"

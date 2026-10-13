@@ -29,6 +29,7 @@ class RateLimitStore:
         self._requests: Dict[str, list] = defaultdict(list)
         # {ip: (locked_until, fail_count)}
         self._login_failures: Dict[str, Tuple[float, int]] = {}
+        self._failure_expires: Dict[str, float] = {}
         
         # 锁，延迟初始化以避免事件循环问题
         self._lock: Optional[asyncio.Lock] = None
@@ -76,9 +77,9 @@ class RateLimitStore:
             
             # 清理过期的登录锁定
             for ip in list(self._login_failures.keys()):
-                locked_until, _ = self._login_failures[ip]
-                if locked_until < now:
+                if self._failure_expires.get(ip, 0) <= now:
                     del self._login_failures[ip]
+                    self._failure_expires.pop(ip, None)
             
             self._last_cleanup = now
     
@@ -89,9 +90,7 @@ class RateLimitStore:
         if redis:
             try:
                 redis_key = f"{self._prefix}req:{key}"
-                # 使用 INCR + EXPIRE 实现滑动窗口（简单计数方案）
-                # 注意：这并非严格的滑动窗口，而是固定窗口，但对于防刷通常足够
-                count = await redis.increment_error_count(redis_key, window)
+                count = await redis.rate_limit_increment(redis_key, window)
                 if count > limit:
                     return True
                 return False
@@ -125,12 +124,8 @@ class RateLimitStore:
         redis = await self._get_redis()
         if redis:
             try:
-                fail_key = f"{self._prefix}login_fail:{ip}"
-                count = await redis.increment_error_count(fail_key, lockout_minutes * 60)
-                
-                if count >= max_failures:
-                    lock_key = f"{self._prefix}login_lock:{ip}"
-                    await redis.set_alert_suppression(lock_key, lockout_minutes * 60)
+                locked = await redis.login_failure_increment(self._prefix, ip, max_failures, lockout_minutes * 60)
+                if locked:
                     logger.warning(f"IP {ip} 登录失败过多，已锁定 {lockout_minutes} 分钟 (Redis)")
                     return True
                 return False
@@ -141,6 +136,9 @@ class RateLimitStore:
         # 2. 降级到内存
         lock = await self._get_lock()
         async with lock:
+            if self._failure_expires.get(ip, 0) <= now:
+                self._login_failures.pop(ip, None)
+                self._failure_expires[ip] = now + lockout_minutes * 60
             if ip in self._login_failures:
                 locked_until, fail_count = self._login_failures[ip]
                 # 检查是否仍在锁定期
@@ -154,6 +152,7 @@ class RateLimitStore:
             if fail_count >= max_failures:
                 locked_until = now + (lockout_minutes * 60)
                 self._login_failures[ip] = (locked_until, fail_count)
+                self._failure_expires[ip] = locked_until
                 logger.warning(f"IP {ip} 登录失败次数过多，已锁定 {lockout_minutes} 分钟 (Memory)")
                 return True
             
@@ -166,10 +165,11 @@ class RateLimitStore:
         redis = await self._get_redis()
         if redis:
             try:
-                lock_key = f"{self._prefix}login_lock:{ip}"
-                if await redis.is_alert_suppressed(lock_key):
-                    # 如果被锁定，返回大致时间（由于 repository 接口限制，这里返回 window 的一半或固定值）
-                    return True, 300 
+                remaining = await redis.login_lock_ttl(self._prefix, ip)
+                if remaining >= 0:
+                    return True, max(1, remaining)
+                if remaining == -1:
+                    return True, 900
             except Exception as e:
                 logger.warning(f"Redis check login lock failed, falling back to memory: {e}")
                 self._redis_available = False
@@ -191,16 +191,16 @@ class RateLimitStore:
         redis = await self._get_redis()
         if redis:
             try:
-                await redis.delete(f"{self._prefix}login_fail:{ip}")
-                await redis.delete(f"{self._prefix}login_lock:{ip}")
+                await redis.clear_login_limits(self._prefix, ip)
             except Exception:
-                pass
+                self._redis_available = False
 
         # 2. 内存清除
         lock = await self._get_lock()
         async with lock:
             if ip in self._login_failures:
                 del self._login_failures[ip]
+            self._failure_expires.pop(ip, None)
 
 
 # 全局存储实例

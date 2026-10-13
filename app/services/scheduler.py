@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import get_config, NodeConfig
+from .config import get_config, NodeConfig, publish_node_snapshot
 from .heartbeat import HeartbeatService, HeartbeatResult
 from .observability import metrics
 
@@ -54,7 +54,7 @@ class SchedulerService:
             # 完整快照包含禁用节点，失败回退也必须使用最近确认的数据库配置。
             # 空库同样更新快照，防止后续故障时重新探测已删除的旧节点。
             nodes = [NodeConfig.from_database(n) for n in db_nodes]
-            get_config().nodes = nodes
+            publish_node_snapshot(get_config(), nodes)
             return [node for node in nodes if node.enabled]
         except Exception as e:
             logger.error(f"从数据库获取节点失败: {e}")

@@ -3,6 +3,7 @@
 python scripts/run_server.py --host 127.0.0.1 --port 8080
 """
 import argparse
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -14,10 +15,86 @@ import subprocess
 import sys
 import time
 import uuid
-import venv
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+
+def recover_before_import(root, host, port):
+    """使用备份中的独立恢复原语；此函数仅依赖标准库，不导入待恢复的 app。"""
+    home = root / ".updates"
+    journal = home / "transaction.json"
+    if not journal.exists():
+        return None
+    if home.is_symlink() or home.resolve().parent != root:
+        raise RuntimeError("升级状态目录必须位于项目内")
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    name = transaction.get("backup", "")
+    if not re.fullmatch(r"backup-\d{8}-\d{6}-[0-9a-f]{8}", name):
+        raise RuntimeError("事务备份名称无效")
+    folder = home / "backups" / name
+    if folder.resolve() != folder or not folder.is_dir():
+        raise RuntimeError("事务备份目录无效")
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    archive = folder / "code.zip"
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["sha256"]:
+        raise RuntimeError("事务备份完整性校验失败")
+    python = manifest["python"]
+    if not Path(python).is_file():
+        raise RuntimeError("事务备份对应的Python环境不存在")
+    # 备份的恢复模块不依赖 app 包。用它自己的解释器运行，避免新依赖污染恢复。
+    # 恢复、锁和路径校验复用旧版本原语，重新加锁后校验事务未发生变化。
+    worker = r'''
+import hashlib, json, os, socket, sys, zipfile
+from pathlib import Path
+root, name, expected, host, port = sys.argv[1:]
+root = Path(root)
+home = root / ".updates"
+folder = home / "backups" / name
+manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+archive = folder / "code.zip"
+if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["sha256"]:
+    raise RuntimeError("Recovery archive checksum mismatch")
+module = "app/services/update_runtime.py"
+with zipfile.ZipFile(archive) as z:
+    source = z.read(module)
+if hashlib.sha256(source).hexdigest() != manifest["files"][module]:
+    raise RuntimeError("Recovery code checksum mismatch")
+ns = {"__name__":"monitor_recovery", "__file__":str(folder / module)}
+exec(compile(source, module, "exec"), ns)
+store = ns["RuntimeStore"](root)
+with ns["OperationLock"](home / "manager.lock"), store.lock():
+    transaction = ns["read_json"](home / "transaction.json")
+    if transaction != json.loads(expected):
+        raise RuntimeError("Recovery transaction changed; retry startup")
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        if os.name == "nt":
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        probe.bind((host, int(port)))
+    restored = store.restore(name, transaction["changed_files"])
+    ns["atomic_json"](home / "runtime.json", {"python":restored["python"]})
+    store.status("error", "检测到中断的升级，已恢复升级前程序；数据库结构不作逆向回滚", 100, rolled_back=True)
+    (home / "transaction.json").unlink()
+'''
+    subprocess.run([python, "-c", worker, str(root), name, json.dumps(transaction), host, str(port)],
+                   cwd=root, check=True,
+                   **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}))
+    return python
+
+
+if __name__ == "__main__":
+    # 连 --help 都不能先导入 app：中断时包初始化文件可能已换，依赖文件尚未换。
+    bootstrap_args = argparse.ArgumentParser(add_help=False)
+    bootstrap_args.add_argument("--host", default="127.0.0.1")
+    bootstrap_args.add_argument("--port", type=int, default=8080)
+    bootstrap, _ = bootstrap_args.parse_known_args()
+    if not 1 <= bootstrap.port <= 65535:
+        bootstrap_args.error("port must be 1..65535")
+    restored_python = recover_before_import(ROOT, bootstrap.host, bootstrap.port)
+    if restored_python:
+        os.execv(restored_python, [restored_python, str(ROOT / "scripts/run_server.py"), *sys.argv[1:]])
 
 import httpx
 from app.services.update_runtime import (
@@ -35,6 +112,7 @@ class ServerManager:
         self.child = None
         self.stopping = False
         self.token = None
+        self.child_env = None
         self.python = read_json(self.store.home / "runtime.json", {"python":sys.executable})["python"]
         if not Path(self.python).is_file():
             # 文件事务尚未提交时，新依赖环境可能因中断而缺失。
@@ -50,10 +128,17 @@ class ServerManager:
         atomic_json(self.store.home / "manager.json", {"pid":os.getpid(), "session":self.session,
                                                       "heartbeat":time.time(), "port":self.port})
 
+    def environment(self):
+        # 不把 .env 装入管理器自身环境；每个子进程重新读取，外部显式环境仍优先。
+        from dotenv.main import DotEnv
+        values = DotEnv(self.root / ".env", override=False).dict()
+        return {**{k:v for k,v in values.items() if v is not None}, **os.environ}
+
     def start_child(self):
         self.token = uuid.uuid4().hex
-        env = {**os.environ, "MONITOR_UPDATE_SESSION":self.session, "MONITOR_INSTANCE":self.token,
+        env = {**self.environment(), "MONITOR_UPDATE_SESSION":self.session, "MONITOR_INSTANCE":self.token,
                "PYTHONUNBUFFERED":"1"}
+        self.child_env = env
         self.child = subprocess.Popen([self.python, "-m", "uvicorn", "app.main:app", "--host", self.host,
                                        "--port", str(self.port)], cwd=self.root, env=env, **quiet_process_options())
 
@@ -74,7 +159,7 @@ class ServerManager:
             host = self.host
         authority = f"[{host}]" if ":" in host else host
         end = time.monotonic() + timeout
-        allowed = [v.strip() for v in os.getenv("ALLOWED_HOSTS", "").split(",") if v.strip()]
+        allowed = [v.strip() for v in (self.child_env or self.environment()).get("ALLOWED_HOSTS", "").split(",") if v.strip()]
         headers = {}
         if allowed and "*" not in allowed:
             # 直连本机仍遵循部署配置的Host校验，不扩大公开允许域名。
@@ -99,7 +184,7 @@ class ServerManager:
         """输出仅落本地日志；不向界面回显pip环境、数据库凭据或绝对路径。"""
         with (self.store.home / "worker.log").open("ab") as log:
             process = subprocess.Popen(args, cwd=cwd or self.root, stdout=log, stderr=log,
-                                       env={**os.environ, "PIP_NO_INPUT":"1"}, **quiet_process_options())
+                                       env={**self.environment(), "PIP_NO_INPUT":"1"}, **quiet_process_options())
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -165,6 +250,8 @@ class ServerManager:
         backup, transaction, stopped = None, None, False
         # 锁由 execute 持有，贯穿备份、替换、重启和失败恢复。
         try:
+            if (self.store.home / "transaction.json").exists():
+                raise UpdateError("存在未恢复的升级事务，请重新启动管理器完成恢复")
             action = request["action"]
             if action not in ("apply", "rollback", "restart"):
                 raise UpdateError("未知管理器操作")
@@ -297,8 +384,6 @@ class ServerManager:
 
 
 def main():
-    from app.services.config import load_env_file
-    load_env_file()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)

@@ -29,6 +29,7 @@ class HeartbeatResult:
     error_message: Optional[str] = None
     response_size: Optional[int] = None
     body_matched: bool = True
+    probe_revision: Optional[str] = None
 
 
 class HeartbeatService:
@@ -141,6 +142,7 @@ class HeartbeatService:
             error_message=probe["error_message"],
             response_size=probe["response_size"],
             body_matched=probe["body_matched"],
+            probe_revision=node.probe_revision,
         )
 
     async def _probe(self, node: NodeConfig, timeout_s: float) -> dict:
@@ -259,6 +261,7 @@ class HeartbeatService:
                     success=False,
                     error_type=type(result).__name__,
                     error_message=str(result),
+                    probe_revision=node.probe_revision,
                 ))
             else:
                 final_results.append(result)
