@@ -178,7 +178,7 @@ async def test_proxy_applies_to_metadata_checksum_archive_and_redirects(tmp_path
 
 async def test_disabled_proxy_uses_explicit_direct_connection(tmp_path, monkeypatch):
     svc, _ = service(tmp_path)
-    svc.save_proxy(False, PROXY)
+    svc.save_proxy(False, "")
     monkeypatch.setenv("HTTPS_PROXY", "http://environment.invalid:1111")
     captured = []
     original = httpx.AsyncClient
@@ -248,3 +248,92 @@ async def test_invalid_api_payload_does_not_echo_credentials(tmp_path, monkeypat
         assert "fixture-user" not in response.text and "fixture-password" not in response.text
         response = await client.post("/api/system/update/proxy", content='{"url":"fixture-password"', headers={"X-Update-Request": "1"})
         assert response.status_code == 400 and "fixture-password" not in response.text
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_legacy_httpx_proxies_keyword_still_routes_update_download(tmp_path, monkeypatch, enabled):
+    svc, seen = service(tmp_path)
+    svc.save_proxy(enabled, PROXY if enabled else "")
+    captured = []
+    original = httpx.AsyncClient
+    def legacy_client(*, proxies, **kwargs):
+        assert "proxy" not in kwargs
+        captured.append(proxies)
+        return original(proxy=proxies, **kwargs)
+    monkeypatch.setattr(httpx, "__version__", "0.25.2")
+    monkeypatch.setattr(httpx, "AsyncClient", legacy_client)
+    result = await finish(svc, "download")
+    assert result["state"] == "ready"
+    assert captured == [PROXY if enabled else None] * 3
+    assert len(seen) == 3
+    assert all("proxy-authorization" not in request.headers for request in seen)
+
+
+async def test_client_initialization_failure_explains_environment_without_leaking_proxy(tmp_path, monkeypatch):
+    svc, seen = service(tmp_path)
+    svc.save_proxy(True, PROXY)
+    def bad_client(**kwargs):
+        raise TypeError("incompatible client " + PROXY)
+    monkeypatch.setattr(httpx, "AsyncClient", bad_client)
+    result = await finish(svc, "check")
+    assert result["state"] == "error"
+    assert "网络组件初始化失败" in result["message"]
+    assert httpx.__version__ in result["message"]
+    assert "requirements.lock" in result["message"]
+    assert not seen
+    for path in (svc.store.home / "status.json", svc.store.home / "history.jsonl"):
+        text = path.read_text(encoding="utf-8")
+        assert "fixture-user" not in text and "fixture-password" not in text
+
+
+@pytest.mark.parametrize("enabled,label", [(True, "通过代理"), (False, "直连")])
+async def test_check_status_names_selected_connection_route(tmp_path, enabled, label):
+    svc, _ = service(tmp_path)
+    svc.save_proxy(enabled, PROXY if enabled else "")
+    state = await svc.start("check")
+    assert label in state["message"]
+    await svc.task
+    assert svc.status()["state"] == "available"
+
+
+@pytest.mark.parametrize("action", ["check", "download"])
+async def test_saved_but_disabled_proxy_never_falls_back_to_direct(tmp_path, action):
+    svc, seen = service(tmp_path)
+    svc.save_proxy(False, PROXY)
+    with pytest.raises(UpdateError, match="未启用"):
+        await svc.start(action)
+    assert not seen
+    assert svc.task is None
+    # Direct low-level callers obey the same rule.
+    with pytest.raises(UpdateError, match="未启用"):
+        await svc._fetch(API_URL, 100)
+    assert not seen
+    svc.save_proxy(True)
+    assert (await finish(svc, action))["state"] in {"ready", "available"}
+    assert seen
+
+
+async def test_disabled_proxy_check_api_explains_enable_requirement(tmp_path, monkeypatch):
+    from test_routes import make_authed_client
+    from app.routes import updates
+    svc, seen = service(tmp_path)
+    svc.save_proxy(False, PROXY)
+    monkeypatch.setattr(updates, "get_update_service", lambda:svc)
+    async with make_authed_client(monkeypatch) as client:
+        response=await client.post("/api/system/update/check", headers={"X-Update-Request":"1"})
+    assert response.status_code == 400
+    assert "未启用" in response.json()["detail"]
+    assert "fixture-password" not in response.text
+    assert not seen
+
+
+async def test_connect_tunnel_407_is_reported_as_proxy_authentication_error(tmp_path):
+    svc, _ = service(tmp_path)
+    svc.save_proxy(True, PROXY)
+    def reject_connect(request):
+        raise httpx.ProxyError("407 Proxy Authentication Required " + PROXY)
+    svc.transport=httpx.MockTransport(reject_connect)
+    result=await finish(svc,"check")
+    assert result["state"] == "error"
+    assert result["message"] == "代理认证失败，请检查代理用户名和密码"
+    assert "fixture-password" not in json.dumps(result)

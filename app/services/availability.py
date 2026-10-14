@@ -243,6 +243,25 @@ class AvailabilityService:
         with self._lock:
             return dict(self._latest_status)
     
+    def rename_node(self, old_name: str, new_name: str):
+        """Move history and cached statistics without resetting availability."""
+        if old_name == new_name:
+            return
+        with self._lock:
+            records = self._records.pop(old_name, None)
+            stats = self._latest_status.pop(old_name, None)
+            # The caller has checked live node names. Any target entries here
+            # belong to an older deleted node and must not be mixed into history.
+            self._records.pop(new_name, None)
+            self._latest_status.pop(new_name, None)
+            if records is not None:
+                for record in records:
+                    record.node_name = new_name
+                self._records[new_name] = records
+            if stats is not None:
+                stats.node_name = new_name
+                self._latest_status[new_name] = stats
+
     def remove_node(self, node_name: str):
         """移除节点的所有历史数据"""
         with self._lock:

@@ -1,6 +1,6 @@
 """服务器监控面板 - 应用主模块"""
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 # 版本号的唯一来源说明：
 #   本文件是权威定义，configs/app.yaml 的 app.version 与 Git 标签

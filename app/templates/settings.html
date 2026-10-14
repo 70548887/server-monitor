@@ -55,7 +55,7 @@
             <header class="settings-card-heading update-heading"><div><h3 id="updateTitle">版本与更新</h3><p>保持监控面板为最新可用版本。</p></div><span class="update-repo">GitHub / server-monitor</span></header>
             <form id="updateProxyForm" class="update-proxy" aria-labelledby="updateProxyTitle">
                 <div class="update-proxy-heading"><div><h4 id="updateProxyTitle">更新网络代理</h4><p class="settings-form-hint">用于版本检查、更新包下载和更新依赖安装，保存后立即生效。</p></div><label class="update-proxy-switch"><input type="checkbox" id="updateProxyEnabled"><span>启用代理</span></label></div>
-                <div class="settings-form-field"><label for="updateProxyUrl">代理地址</label><div class="update-proxy-input"><input type="password" id="updateProxyUrl" name="update_proxy" autocomplete="new-password" spellcheck="false" maxlength="2048" placeholder="http://用户名:密码@主机:端口" aria-describedby="updateProxyHint"><button type="button" id="updateProxyVisibility" class="update-proxy-visibility" aria-controls="updateProxyUrl" aria-pressed="false" aria-label="显示代理地址">显示</button></div><p class="settings-form-hint" id="updateProxyHint">支持 HTTP / HTTPS 代理。留空保留已保存的地址；特殊字符需使用 URL 编码。</p></div>
+                <div class="settings-form-field"><label for="updateProxyUrl">代理地址</label><div class="update-proxy-input"><input type="password" id="updateProxyUrl" name="update_proxy" autocomplete="new-password" spellcheck="false" maxlength="2048" placeholder="http://用户名:密码@主机:端口" aria-describedby="updateProxyHint"><button type="button" id="updateProxyVisibility" class="update-proxy-visibility" aria-controls="updateProxyUrl" aria-pressed="false" aria-label="显示代理地址">显示</button></div><p class="settings-form-hint" id="updateProxyHint">支持 HTTP / HTTPS 代理。留空保留已保存地址；关闭后需启用才能更新，清除地址后才使用直连。</p></div>
                 <div class="update-proxy-footer"><p id="updateProxySummary" class="settings-form-hint">正在读取代理配置…</p><div class="update-proxy-actions"><button type="button" class="btn btn-secondary" id="updateProxyClear" disabled>清除代理</button><button type="submit" class="btn-save" id="updateProxySave">保存代理</button></div></div>
                 <p id="updateProxyMessage" class="settings-form-hint" role="status" aria-live="polite"></p>
             </form>
@@ -68,4 +68,4 @@
     </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=visibility-1"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=proxy-required-1"></script>{% endblock %}

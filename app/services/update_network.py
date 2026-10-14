@@ -82,6 +82,12 @@ def load_update_proxy(root):
         raise UpdateError(_INVALID_CONFIG) from None
 
 
+def ensure_proxy_enabled(config):
+    """保留了代理地址时禁止意外直连；用户需启用代理或明确清除地址。"""
+    if config["url"] and not config["enabled"]:
+        raise UpdateError("代理地址已保存但未启用，请启用代理后再检查、下载或应用更新")
+
+
 def proxy_status(root):
     """页面只能取得代理端点；用户名和密码均不回传。"""
     config = load_update_proxy(root)

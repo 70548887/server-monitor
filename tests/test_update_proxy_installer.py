@@ -70,6 +70,11 @@ def test_disabled_pip_proxy_removes_inherited_proxy_variables(manager, monkeypat
     inherited["PIP_INDEX_URL"] = "https://index.example.invalid/simple"
     monkeypatch.setattr(manager, "environment", lambda: inherited)
     calls = capture_process(monkeypatch)
+    if saved and saved["url"]:
+        with pytest.raises(UpdateError, match="未启用"):
+            manager.command(["fixture-python", "-m", "pip"], 10, "安装依赖", use_update_proxy=True)
+        assert not calls
+        return
     manager.command(["fixture-python", "-m", "pip"], 10, "安装依赖", use_update_proxy=True)
     env = calls[0][1]["env"]
     assert not any(key.lower() in PROXY_KEYS for key in env)

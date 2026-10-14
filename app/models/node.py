@@ -10,6 +10,7 @@ from .base import Base
 class NodeModel(Base):
     """节点配置表"""
     __tablename__ = "nodes"
+    __table_args__ = {"mysql_engine": "InnoDB"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), unique=True, nullable=False, index=True, comment="节点唯一名称")
