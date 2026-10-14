@@ -2,7 +2,7 @@
 
 多服务器心跳监控：检测接口可用性、延迟与状态，带告警通知与趋势分析。
 
-当前版本：**v1.1.0**
+当前版本：**v1.2.0**
 
 代码仓库：[70548887/server-monitor](https://github.com/70548887/server-monitor)
 
@@ -28,10 +28,10 @@ open http://localhost:8080
 ### 本地开发
 
 ```bash
-# 1. 安装依赖
-#    requirements.txt 声明版本下限，便于跟进上游
-#    requirements.lock 锁定精确版本，生产与 CI 用它
-pip install -r requirements.txt
+# 1. 安装已验证的依赖组合（与生产、CI 保持一致）
+python -m pip install -r requirements.lock
+python -m pip check
+#    requirements.txt 仅用于主动测试其他依赖版本
 #    注意：email-validator 是 notifications 路由的硬依赖，缺它应用无法导入
 
 # 2. 配置环境变量
@@ -47,7 +47,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 访问 `http://localhost:8080`，用 `.env` 中的管理员账号登录。
 
-启动后会自动创建默认管理员与通知渠道（凭据取自 `.env`）。
+启动时会先自动检查数据库表结构，补齐已发布版本所需的缺失字段和索引，再创建默认管理员与通知渠道（凭据取自 `.env`）。旧库升级无需另跑补列命令；此检查每次启动都会执行，已完成的变更不会重复执行。数据库应已存在，应用账号需具备建表、改表及创建索引的权限；结构升级失败会记录具体原因并停止启动，修复后重新启动即可继续。
 
 ### 传统部署（systemd + nginx）
 
@@ -70,6 +70,56 @@ sudo nginx -t && sudo systemctl reload nginx
 > 数据库不可用时应用会降级为内存模式运行（数据不持久化），
 > 若配置了 ADMIN_PASSWORD，数据库故障时可使用环境变量账号降级登录。
 > 此时用于应急查看，节点等数据库写入操作会返回失败。
+
+### 宝塔部署后登录页返回 500
+
+若日志已显示 `Application startup complete`，随后访问 `/login` 报
+`ValueError: context must include a "request" key`，说明运行环境仍在使用旧版
+Starlette 模板接口。项目使用 `TemplateResponse(request, name, context)`，
+要求 FastAPI ≥ 0.108.0、Starlette ≥ 0.29.0；旧环境把模板名误当成上下文，
+即使代码的字典中已有 `request` 也会报错。
+
+在宝塔项目实际使用的 Python 环境中执行（`python` 应替换为项目解释器的完整路径）：
+
+```bash
+cd /www/wwwroot/server_monitor
+python -m pip install -r requirements.lock
+python -m pip check
+python -c "import sys, fastapi, starlette; print(sys.executable); print('FastAPI', fastapi.__version__, 'Starlette', starlette.__version__)"
+```
+
+安装及依赖检查成功后，在宝塔中重启该 Python 项目，再验证登录页：
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login
+```
+
+预期返回 `200`。若配置了 `ALLOWED_HOSTS`，需通过配置的域名访问或为请求添加对应的 `Host` 头。
+只替换代码不会更新 Python 依赖；单独升级 Starlette 可能与旧 FastAPI 冲突，
+因此应整体安装锁定文件。开头 APScheduler 的 `pkg_resources is deprecated`
+是另一项弃用警告，不是本次登录页 500 的原因；锁定文件同时提供了较新的 APScheduler。
+
+### 告警事件展开失败：通知记录缺少字段
+
+旧版展开故障事件时报 `Unexpected token ... Internal Server Error`，且后台出现
+`Unknown column 'notification_logs.incident_id' in 'field list'`，是旧表缺列导致。
+当前版本在启动时自动检查并补齐 `notification_logs`、`alert_logs` 的事件关联字段、
+相关索引，以及事件表的 InnoDB 引擎。安装当前代码后重启即可执行；完成后日志显示
+“数据库表结构检查完成，本次补齐 N 项”。多个启动进程通过数据库命名锁避免同时改表。
+下列手工脚本仍可用于旧版修复或独立建库，与启动过程共用升级逻辑。
+
+在服务器项目目录中，用宝塔项目实际使用的 Python 解释器运行：
+
+```bash
+cd /www/wwwroot/server_monitor
+python scripts/bootstrap_database.py
+```
+
+脚本会检查并补齐 `notification_logs`、`alert_logs` 的 `incident_id`、`notify_seq`
+以及关联索引，保留已有数据，可重复运行。成功后重启项目并重新展开事件。
+恢复旧版 SQL 备份之后，重启当前版本会重新补齐结构；也可直接运行此脚本。
+此前因缺列而写入失败的通知记录不会自动补回；补列后若显示“尚无通知发送记录”，
+表示该事件还没有已保存的关联记录。
 
 ### 从备份恢复
 
@@ -301,6 +351,12 @@ python -m pytest tests/test_browser.py
 `datetime.now(timezone.utc)` 写库——带时区的对象与已有朴素数据
 混用会产生 8 小时偏差。
 
+## 设置页
+
+设置分为「账户资料」「账户安全」「系统更新」三个标签。每次只展示当前标签的内容，
+支持左右方向键与 Home / End 切换；刷新、浏览器前进后退、表单提交后保留对应标签。
+可通过 `/settings?tab=account`、`/settings?tab=security`、`/settings?tab=updates` 直接访问。
+
 ## 在线升级
 
 “设置 → 系统更新”提供版本检查、更新说明、校验下载、程序备份、应用更新、回滚和重启。
@@ -382,11 +438,40 @@ chore: 构建/运维
 `v0.1.0-pre` 标记的是首次纳管的快照（页面全 500），
 `v1.0.0` 才是首个可用版本。
 
+### 本地发布归档
+
+每个正式版本统一保存在项目根目录的 `release/<版本标签>/`，例如：
+
+```text
+release/
+└── v1.1.0/
+    ├── server-monitor-v1.1.0.zip
+    ├── SHA256SUMS.txt
+    └── RELEASE_NOTES.md
+```
+
+目录名与 GitHub Release 标签一致，安装包和校验文件保留原文件名及字节。新版本新增独立目录，保留旧版本；`release/` 不提交 Git，正式附件上传到 GitHub Release。开发期间的解包、下载和回归验证目录仍放在 `dist/` 或 `logs/`。
+
+已发布版本可直接用 GitHub CLI 归档（PowerShell）：
+
+```powershell
+$releaseTag = 'v1.1.0'
+gh release download $releaseTag --repo 70548887/server-monitor --dir "release/$releaseTag" --pattern "server-monitor-$releaseTag.zip" --pattern 'SHA256SUMS.txt'
+if ($LASTEXITCODE -ne 0) { throw '下载发布附件失败' }
+$releaseNotes = gh release view $releaseTag --repo 70548887/server-monitor --json body --jq .body
+if ($LASTEXITCODE -ne 0) { throw '读取发布说明失败' }
+$releaseNotes | Set-Content -Encoding utf8 "release/$releaseTag/RELEASE_NOTES.md"
+Get-FileHash -Algorithm SHA256 "release/$releaseTag/server-monitor-$releaseTag.zip"
+```
+
+将输出的 SHA256 与该版本的 `SHA256SUMS.txt` 核对一致，再用于部署。
+
 ### 发布检查清单
 
 - [ ] `python -m pytest` 全部通过
 - [ ] 三处版本号一致
 - [ ] `CHANGELOG.md` 已更新
+- [ ] 正式安装包、SHA256 清单与发布说明已归档至 `release/<版本标签>/`
 - [ ] 若改了数据库结构，`bootstrap_database.py` 已验证
 - [ ] 若改了告警节奏，评估过对通知量的影响
 - [ ] `.env` 未进入版本库

@@ -189,10 +189,25 @@ async function toggleIncidentDetail(incidentId) {
     const body = document.getElementById(`inc-detail-body-${incidentId}`);
     if (!body) return;
 
+    body.innerHTML = '<span style="color:#888;">加载中...</span>';
     try {
         const res = await fetch(`/api/notifications/incidents/${incidentId}/notifications`);
-        const data = await res.json();
-        const logs = data.notifications || [];
+        if (res.status === 401 || res.redirected) {
+            throw new Error('登录已过期，请重新登录后重试');
+        }
+        // 代理和未捕获的后端异常可能返回文本/HTML，不能直接当作 JSON 解析。
+        const contentType = res.headers.get('content-type') || '';
+        const data = contentType.includes('application/json')
+            ? await res.json().catch(() => null) : null;
+        if (!res.ok) {
+            const detail = data?.detail;
+            const message = typeof detail === 'string' ? detail : detail?.message;
+            throw new Error(message || `提醒记录请求失败（HTTP ${res.status}），请稍后重试`);
+        }
+        if (!data || !Array.isArray(data.notifications)) {
+            throw new Error('提醒记录响应格式异常，请稍后重试');
+        }
+        const logs = data.notifications;
 
         if (logs.length === 0) {
             body.innerHTML = '<span style="color:#888;">该事件尚无通知发送记录</span>';
@@ -225,7 +240,7 @@ async function toggleIncidentDetail(incidentId) {
                 <tbody>${rows}</tbody>
             </table>`;
     } catch (e) {
-        body.innerHTML = `<span style="color:#dc3545;">加载失败: ${escapeHtml(e.message)}</span>`;
+        body.innerHTML = `<span style="color:#dc3545;">加载失败: ${escapeHtml(e.message)}。可收起后重新展开重试。</span>`;
     }
 }
 

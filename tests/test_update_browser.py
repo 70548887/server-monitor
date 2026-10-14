@@ -22,7 +22,7 @@ async def test_update_settings_check_download_backup_and_restart_gating(login_br
     monkeypatch.setattr(AuthService,"get_session",AsyncMock(return_value={"admin_id":1,"username":"test-admin"}))
     monkeypatch.setattr(AuthService,"get_admin_by_id",AsyncMock(return_value=SimpleNamespace(username="test-admin",email=None,is_active=True,created_at=None,last_login=None)))
     await page.context.add_cookies([{"name":"session_id","value":"fixture-session","url":url}])
-    await page.goto(url+"/settings")
+    await page.goto(url+"/settings?tab=updates")
     await expect(page.locator('#updateCurrent')).to_have_text('v1.0.0')
     await expect(page.locator('#updateApply')).to_be_disabled()
     await page.locator('#updateCheck').click()
@@ -49,7 +49,7 @@ async def test_update_page_handles_api_failure_without_stuck_buttons(login_brows
     monkeypatch.setattr(AuthService,"get_admin_by_id",AsyncMock(return_value=None))
     await page.context.add_cookies([{"name":"session_id","value":"fixture-session","url":url}])
     await page.route('**/api/system/update/status',lambda route:route.fulfill(status=503,content_type='application/json',body='{"detail":"offline"}'))
-    await page.goto(url+'/settings')
+    await page.goto(url+'/settings?tab=updates')
     await expect(page.locator('#updateMessage')).to_contain_text('暂时无法连接')
     await expect(page.locator('#updateApply')).to_be_disabled()
     assert not errors
