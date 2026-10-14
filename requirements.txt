@@ -5,7 +5,8 @@ starlette>=0.29.0
 uvicorn[standard]>=0.24.0
 
 # HTTP Client (async)
-httpx>=0.25.0
+# Explicit proxy= support; matches the verified locked HTTP client.
+httpx>=0.28.1
 
 # Scheduler
 APScheduler>=3.10.0

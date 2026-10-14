@@ -14,6 +14,7 @@ import httpx
 from packaging.version import Version, InvalidVersion
 
 from app import __version__
+from .update_network import load_update_proxy, proxy_status, save_update_proxy
 from .update_runtime import (
     RuntimeStore, UpdateError, UpdateBusy, MAX_PACKAGE, BUSY,
     atomic_json, read_json, extract_package, file_hashes, package_version,
@@ -105,15 +106,38 @@ class UpdateService:
         if value.get("release"):
             value["release"]["has_update"] = Version(value["release"]["version"]) > Version(self.version)
         return {**value, "current_version":self.version, "repository":REPOSITORY,
-                "capability":self.capability(), "backups":self.store.backups()}
+                "capability":self.capability(), "backups":self.store.backups(),
+                "proxy":proxy_status(self.store.root)}
 
     def audit(self, action, actor, result):
         with (self.store.home / "history.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps({"time":time.time(), "action":action, "actor":str(actor)[:100], "result":result}, ensure_ascii=False) + "\n")
 
+    def save_proxy(self, enabled, url=None, actor="admin"):
+        with self.store.lock():
+            self.store.ensure_idle()
+            save_update_proxy(self.store.root, enabled, url)
+            self._last_check = 0
+            self.audit("proxy", actor, "saved")
+        return self.status()
+
     async def _fetch(self, url, maximum, destination=None, progress=False):
-        """逐跳验证URL；令牌只发到GitHub API，不转发到资产CDN。"""
-        async with httpx.AsyncClient(timeout=httpx.Timeout(40, connect=10), transport=self.transport, follow_redirects=False) as client:
+        """逐跳验证URL；代理覆盖所有更新请求，令牌只发往GitHub API。"""
+        config = load_update_proxy(self.store.root)
+        options = {"timeout": httpx.Timeout(40, connect=10), "transport": self.transport,
+                   "follow_redirects": False, "trust_env": False,
+                   "proxy": config["url"] if config["enabled"] else None}
+        if config["enabled"] and self.transport is not None:
+            # 显式注入的测试transport也必须覆盖代理路由，禁止测试意外真实联网。
+            options["mounts"] = {"all://": self.transport}
+        try:
+            return await self._fetch_with_client(url, maximum, destination, progress, options)
+        except (httpx.RequestError, httpx.InvalidURL, UnicodeError):
+            message = "升级代理连接失败，请检查代理地址、认证和连通性" if config["enabled"] else "连接GitHub失败，请检查网络或配置升级代理"
+            raise UpdateError(message) from None
+
+    async def _fetch_with_client(self, url, maximum, destination, progress, options):
+        async with httpx.AsyncClient(**options) as client:
             for _ in range(6):
                 if not trusted_url(url):
                     raise UpdateError("下载被重定向到非GitHub地址")
@@ -127,6 +151,8 @@ class UpdateService:
                         from urllib.parse import urljoin
                         url = urljoin(url, response.headers.get("location", ""))
                         continue
+                    if response.status_code == 407:
+                        raise UpdateError("代理认证失败，请检查代理用户名和密码")
                     if response.status_code in (403, 429):
                         raise UpdateError("GitHub访问受限，请稍后重试或配置GITHUB_TOKEN")
                     if response.status_code == 404:
