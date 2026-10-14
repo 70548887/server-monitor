@@ -223,7 +223,7 @@ async def test_proxy_form_fits_mobile_width(proxy_browser, width):
     await open_proxy_settings(page, url)
     await save_proxy(page)
     await expect(page.locator("#updateProxyForm")).to_contain_text(DISPLAY_URL)
-    for selector in (".settings-page", "#updateProxyForm", "#updateProxyUrl", "#updateProxySave", "#updateProxyClear"):
+    for selector in (".settings-page", "#updateProxyForm", "#updateProxyUrl", "#updateProxySave", "#updateProxyClear", "#updateProxyVisibility"):
         size = await page.locator(selector).evaluate("""element => ({
             left: element.getBoundingClientRect().left,
             right: element.getBoundingClientRect().right,
@@ -236,4 +236,53 @@ async def test_proxy_form_fits_mobile_width(proxy_browser, width):
         if selector != "#updateProxyUrl":
             assert size["scroll"] <= size["client"] + 1, (selector, size)
     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert not errors
+
+
+async def test_proxy_visibility_toggle_and_save_clear_reset(proxy_browser):
+    from playwright.async_api import expect
+
+    page, url, svc, _, errors = proxy_browser
+    await open_proxy_settings(page, url)
+    field = page.locator("#updateProxyUrl")
+    toggle = page.locator("#updateProxyVisibility")
+    posts = []
+    page.on("request", lambda request: posts.append(request.url)
+            if request.method == "POST" and request.url.endswith("/proxy") else None)
+    await expect(field).to_have_attribute("type", "password")
+    await expect(toggle).to_have_attribute("aria-pressed", "false")
+    await expect(toggle).to_have_attribute("type", "button")
+    await toggle.click()
+    await expect(field).to_have_attribute("type", "text")
+    await expect(page.locator("#updateProxyMessage")).not_to_contain_text("修改尚未保存")
+    await field.fill(PROXY_URL)
+    await toggle.focus()
+    await page.keyboard.press("Enter")
+    await expect(field).to_have_attribute("type", "password")
+    await expect(field).to_have_value(PROXY_URL)
+    await page.keyboard.press("Space")
+    await expect(field).to_have_attribute("type", "text")
+    await expect(toggle).to_have_attribute("aria-label", "隐藏代理地址")
+    assert posts == []
+    assert not svc.status()["proxy"]["configured"]
+
+    folder = Path("logs/release-v1.3.1")
+    folder.mkdir(parents=True, exist_ok=True)
+    await page.locator("#updateProxyForm").screenshot(path=str(folder / "proxy-visibility.png"))
+
+    await page.locator("#updateProxyEnabled").check()
+    response, _ = await submit_proxy(page)
+    assert response.status == 200
+    await expect(field).to_have_value("")
+    await expect(field).to_have_attribute("type", "password")
+    await expect(toggle).to_have_text("显示")
+    await expect(toggle).to_have_attribute("aria-pressed", "false")
+    await toggle.click()
+    await expect(field).to_have_value("")
+    await field.fill("http://replacement.example.test:3128")
+    response, _ = await submit_proxy(page, "#updateProxyClear")
+    assert response.status == 200
+    await expect(field).to_have_value("")
+    await expect(field).to_have_attribute("type", "password")
+    assert not svc.status()["proxy"]["configured"]
     assert not errors
