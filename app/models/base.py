@@ -117,7 +117,7 @@ async def init_db(
     pool_recycle: int = 1800,
     create_tables: bool = True,
 ) -> AsyncEngine:
-    """初始化异步数据库（创建引擎和表）"""
+    """初始化数据库；默认检查并补齐已发布表结构，完成后才开放会话。"""
     global _AsyncSessionLocal
     
     engine = get_engine(
@@ -130,6 +130,10 @@ async def init_db(
         pool_recycle=pool_recycle,
     )
     
+    if create_tables:
+        from app.models.schema import ensure_schema
+        await ensure_schema(engine)
+
     _AsyncSessionLocal = async_sessionmaker(
         engine,
         class_=AsyncSession,
@@ -137,11 +141,6 @@ async def init_db(
         autoflush=False,
         expire_on_commit=False,
     )
-    
-    if create_tables:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("数据库表已创建/验证")
     
     return engine
 
