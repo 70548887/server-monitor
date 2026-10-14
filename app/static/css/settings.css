@@ -82,6 +82,11 @@
 .update-proxy-switch { display:inline-flex; align-items:center; gap:8px; font-size:12px; white-space:nowrap; cursor:pointer; }
 .update-proxy-switch input { width:16px; height:16px; accent-color:var(--primary); }
 .update-proxy .settings-form-field { margin-bottom:12px; }
+.update-proxy-input { position:relative; min-width:0; }
+.update-proxy-input input { padding-right:68px; }
+.update-proxy-input input::-ms-reveal { display:none; }
+.update-proxy-visibility { position:absolute; top:50%; right:6px; transform:translateY(-50%); min-height:32px; padding:4px 10px; border:0; border-radius:5px; background:transparent; color:var(--primary); font:inherit; font-size:12px; cursor:pointer; }
+.update-proxy-visibility:hover:not(:disabled) { background:rgba(59,130,246,.08); }
 .update-proxy-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
 .update-proxy-footer > p { min-width:0; flex:1 1 200px; }
 .update-proxy-actions { display:flex; flex-wrap:wrap; gap:8px; }

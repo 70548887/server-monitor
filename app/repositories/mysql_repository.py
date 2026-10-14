@@ -20,6 +20,7 @@ MySQL 异步存储仓库（含自动重连机制）
 
 import logging
 from datetime import datetime, timedelta
+from time import perf_counter
 from typing import Optional, List
 
 from sqlalchemy import select, delete, update, func, and_, text, case, cast, Integer, tuple_
@@ -907,46 +908,51 @@ class MySQLRepository:
     async def get_recent_samples(self, hours: int = 24) -> List[dict]:
         """
         获取最近N小时的所有样本（用于启动时加载）
-        
+
         Args:
             hours: 加载时间范围（小时）
-        
+
         Returns:
             样本字典列表，按时间升序排列
-        
+
         注意：
             - 只返回当前数据库中存在的节点的样本
             - 已删除节点的样本不会返回
         """
+        started_at = perf_counter()
         cutoff = utcnow() - timedelta(hours=hours)
-        
+
         try:
             async with self._get_session_manager() as session:
-                # 获取当前存在的节点名称列表
-                existing_nodes_stmt = select(NodeModel.name).where(NodeModel.deleted_at.is_(None))
-                
-                # 只查询这些节点的样本
-                stmt = select(SampleModel).where(
-                    SampleModel.timestamp >= cutoff,
-                    SampleModel.node_name.in_(existing_nodes_stmt)
-                ).order_by(SampleModel.timestamp.asc())
-                
-                result = await session.execute(stmt)
-                samples = result.scalars().all()
-                
-                logger.info(f"已加载过去 {hours} 小时的 {len(samples)} 条样本")
-                
-                return [
-                    {
-                        "node_name": s.node_name,
-                        "timestamp": s.timestamp,
-                        "success": s.success,
-                        "latency_ms": s.latency_ms,
-                        "status_code": s.status_code,
-                        "error_type": s.error_type,
-                    }
-                    for s in samples
-                ]
+                # 先物化小规模节点名单。IN 子查询在旧 MySQL 数据库上可能被
+                # 改写为节点驱动的半连接，反复扫描 samples 并使用临时表排序。
+                node_result = await session.execute(
+                    select(NodeModel.name).where(NodeModel.deleted_at.is_(None))
+                )
+                existing_nodes = node_result.scalars().all()
+                samples = []
+                if existing_nodes:
+                    # 预热只需要这六列，避免传输 URL、错误正文等未使用字段，
+                    # 并省去为每条历史记录构建完整 ORM 实例的开销。
+                    stmt = select(
+                        SampleModel.node_name,
+                        SampleModel.timestamp,
+                        SampleModel.success,
+                        SampleModel.latency_ms,
+                        SampleModel.status_code,
+                        SampleModel.error_type,
+                    ).where(
+                        SampleModel.timestamp >= cutoff,
+                        SampleModel.node_name.in_(existing_nodes),
+                    ).order_by(SampleModel.timestamp.asc())
+                    result = await session.execute(stmt)
+                    samples = [dict(row) for row in result.mappings().all()]
+
+                logger.info(
+                    "已加载过去 %s 小时的 %s 条样本，耗时 %.3f 秒",
+                    hours, len(samples), perf_counter() - started_at,
+                )
+                return samples
         except SQLAlchemyError as e:
             logger.error(
                 f"Failed to get recent samples: hours={hours}, "
