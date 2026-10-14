@@ -1,5 +1,7 @@
 # Web Framework
-fastapi>=0.104.0
+# TemplateResponse(request, name, context) requires Starlette 0.29+ / FastAPI 0.108+.
+fastapi>=0.108.0
+starlette>=0.29.0
 uvicorn[standard]>=0.24.0
 
 # HTTP Client (async)

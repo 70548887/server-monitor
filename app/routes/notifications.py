@@ -1172,18 +1172,34 @@ async def get_incident_notifications(
     用于事件详情展开：能看到这个故障一共打扰了几次、分别是什么时候。
     """
     from sqlalchemy import select
+    from sqlalchemy.exc import SQLAlchemyError
     from ..models.base import get_session_context
     from ..models.notification_channel import NotificationLogModel
 
-    async with get_session_context() as session:
-        stmt = (
-            select(NotificationLogModel)
-            .where(NotificationLogModel.incident_id == incident_id)
-            .order_by(NotificationLogModel.sent_at.asc())
-            .limit(limit)
+    try:
+        async with get_session_context() as session:
+            stmt = (
+                select(NotificationLogModel)
+                .where(NotificationLogModel.incident_id == incident_id)
+                .order_by(NotificationLogModel.sent_at.asc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            logs = [log.to_dict() for log in result.scalars().all()]
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "Failed to read incident notification logs: incident_id=%s; "
+            "check database connectivity and run python scripts/bootstrap_database.py "
+            "if the database schema needs upgrading",
+            incident_id,
         )
-        result = await session.execute(stmt)
-        logs = [log.to_dict() for log in result.scalars().all()]
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "NOTIFICATION_LOGS_UNAVAILABLE",
+                "message": "提醒记录暂时无法读取，请检查数据库连接及是否已完成数据库升级。",
+            },
+        ) from exc
 
     return {
         "incident_id": incident_id,

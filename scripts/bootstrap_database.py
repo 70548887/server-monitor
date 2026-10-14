@@ -1,5 +1,5 @@
 """
-数据库引导脚本 - 建库 + 建表 + Phase 2 迁移
+数据库引导脚本 - 建库 + 建表 + 已发布增量升级
 
 用途：
     在导入数据之前，先把库与表结构准备好。本脚本**不插入任何业务数据**，
@@ -14,7 +14,7 @@
 
 幂等：
     可重复执行。已存在的库/表不会被删除或重建；
-    Phase 2 的补列语句只在缺列时才执行。
+    与应用启动共用升级流程，补列语句只在缺列时才执行。
 """
 
 import asyncio
@@ -34,7 +34,8 @@ import app.models.node  # noqa: F401
 import app.models.sample  # noqa: F401
 import app.models.notification_channel  # noqa: F401
 
-from app.models.base import Base, get_engine
+from app.models.base import get_engine
+from app.models.schema import ensure_schema
 from app.services.config import load_config
 
 
@@ -68,7 +69,7 @@ async def create_database_if_missing(config) -> bool:
 
 
 async def create_tables(config) -> int:
-    """按 ORM 模型建表（已存在的表不会被改动）"""
+    """使用与应用启动相同的锁、建表和增量升级流程。"""
     engine = get_engine(
         host=config.database.mysql_host,
         port=config.database.mysql_port,
@@ -77,8 +78,7 @@ async def create_tables(config) -> int:
         database=config.database.mysql_database,
     )
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await ensure_schema(engine, report=log)
 
         async with engine.connect() as conn:
             result = await conn.execute(text("SHOW TABLES"))
@@ -88,27 +88,8 @@ async def create_tables(config) -> int:
         await engine.dispose()
 
 
-async def column_exists(conn, table: str, column: str) -> bool:
-    """检查列是否存在"""
-    result = await conn.execute(
-        text(
-            "SELECT COUNT(*) FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() AND table_name = :t AND column_name = :c"
-        ),
-        {"t": table, "c": column},
-    )
-    return result.scalar() > 0
-
-
 async def run_phase2_migration(config) -> int:
-    """
-    Phase 2 迁移：alert_incidents 表 + 补列
-
-    Base.metadata.create_all 只创建"不存在的表"，不会给已存在的表补列。
-    所以 alert_logs / notification_logs 的新列必须显式 ALTER。
-    """
-    from app.models.notification_channel import AlertIncidentModel
-
+    """兼容旧调用入口；增量升级与应用启动共用同一实现和升级锁。"""
     engine = get_engine(
         host=config.database.mysql_host,
         port=config.database.mysql_port,
@@ -116,95 +97,8 @@ async def run_phase2_migration(config) -> int:
         password=config.database.mysql_password,
         database=config.database.mysql_database,
     )
-    added = 0
     try:
-        async with engine.begin() as conn:
-            # 1. alert_incidents 表
-            exists = await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM information_schema.tables "
-                    "WHERE table_schema = DATABASE() AND table_name = 'alert_incidents'"
-                )
-            )
-            if exists.scalar() == 0:
-                await conn.run_sync(AlertIncidentModel.__table__.create)
-                log("  [新增] 表 alert_incidents")
-                added += 1
-            else:
-                log("  [已存在] 表 alert_incidents")
-
-            engine_name = (await conn.execute(text(
-                "SELECT ENGINE FROM information_schema.tables "
-                "WHERE table_schema = DATABASE() AND table_name = 'alert_incidents'"
-            ))).scalar()
-            if engine_name != "InnoDB":
-                await conn.execute(text("ALTER TABLE alert_incidents ENGINE=InnoDB"))
-                log("  [修复] alert_incidents 已转为 InnoDB")
-                added += 1
-
-            # 2. 补列
-            for table, col, ddl in [
-                (
-                    "alert_logs", "incident_id",
-                    "ALTER TABLE alert_logs ADD COLUMN incident_id INT NULL "
-                    "COMMENT '所属故障事件ID'",
-                ),
-                (
-                    "alert_logs", "notify_seq",
-                    "ALTER TABLE alert_logs ADD COLUMN notify_seq INT NULL "
-                    "COMMENT '该事件内第几次提醒(从1开始)'",
-                ),
-                (
-                    "notification_logs", "incident_id",
-                    "ALTER TABLE notification_logs ADD COLUMN incident_id INT NULL "
-                    "COMMENT '所属故障事件ID'",
-                ),
-                (
-                    "notification_logs", "notify_seq",
-                    "ALTER TABLE notification_logs ADD COLUMN notify_seq INT NULL "
-                    "COMMENT '该事件内第几次提醒(从1开始)'",
-                ),
-            ]:
-                if await column_exists(conn, table, col):
-                    log(f"  [已存在] {table}.{col}")
-                else:
-                    await conn.execute(text(ddl))
-                    log(f"  [新增] {table}.{col}")
-                    added += 1
-
-            # 3. 索引（MySQL 不支持 CREATE INDEX IF NOT EXISTS）
-            for index, ddl in [
-                (
-                    "ix_alert_incidents_next_notify_at",
-                    "CREATE INDEX ix_alert_incidents_next_notify_at "
-                    "ON alert_incidents (next_notify_at)",
-                ),
-                (
-                    "ix_notification_logs_incident_id",
-                    "CREATE INDEX ix_notification_logs_incident_id "
-                    "ON notification_logs (incident_id)",
-                ),
-                (
-                    "ix_alert_logs_incident_id",
-                    "CREATE INDEX ix_alert_logs_incident_id "
-                    "ON alert_logs (incident_id)",
-                ),
-            ]:
-                result = await conn.execute(
-                    text(
-                        "SELECT COUNT(*) FROM information_schema.statistics "
-                        "WHERE table_schema = DATABASE() AND index_name = :i"
-                    ),
-                    {"i": index},
-                )
-                if result.scalar() == 0:
-                    await conn.execute(text(ddl))
-                    log(f"  [新增] 索引 {index}")
-                    added += 1
-                else:
-                    log(f"  [已存在] 索引 {index}")
-
-        return added
+        return await ensure_schema(engine, create_tables=False, report=log)
     finally:
         await engine.dispose()
 
@@ -281,7 +175,7 @@ async def main() -> int:
         return 1
 
     log("")
-    log("[3/4] 创建表结构（按 ORM 模型）...")
+    log("[3/4] 检查并补齐表结构（与应用启动相同）...")
     try:
         count = await create_tables(config)
         log(f"  [OK] 共 {count} 张表")
@@ -290,14 +184,7 @@ async def main() -> int:
         return 1
 
     log("")
-    log("[4/4] Phase 2 迁移（事件表与补列）...")
-    try:
-        added = await run_phase2_migration(config)
-        log(f"  完成，本次新增 {added} 项")
-    except Exception as e:
-        log(f"  [失败] {type(e).__name__}: {str(e)[:160]}")
-        return 1
-
+    log("[4/4] 检查数据库状态...")
     await show_status(config)
 
     log("")

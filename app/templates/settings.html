@@ -1,220 +1,65 @@
 {% extends "layout.html" %}
-
-{% block title %}账户设置 - 服务器监控面板{% endblock %}
-
-{% block head %}
-<link rel="stylesheet" href="/static/css/settings.css">
-{% endblock %}
-
+{% block title %}设置 - 服务器监控面板{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/settings.css?v=tabs-1">{% endblock %}
 {% block content %}
+{% set account_name = admin.username if admin else username %}
+{% set active_tab = settings_tab|default('account') %}
 <div class="settings-page">
-    <div class="page-header">
-        <h1>设置</h1>
-        <p class="subtitle">管理账户、安全与系统版本</p>
+    <header class="settings-header">
+        <div><div class="settings-eyebrow">工作空间 / 偏好与管理</div><h1>设置</h1><p>管理账户、安全与系统版本</p></div>
+        <div class="settings-identity"><span class="settings-avatar" aria-hidden="true">{{ account_name[:1]|upper }}</span><div><strong>{{ account_name }}</strong><span>当前登录账户</span></div></div>
+    </header>
+    {% if success %}<div class="settings-message is-success" role="status">{{ success }}</div>{% endif %}
+    {% if error %}<div class="settings-message is-error" role="alert">{{ error }}</div>{% endif %}
+    <div class="settings-tabs" role="tablist" aria-label="设置分类">
+        {% for key, label, path in [('account', '账户资料', 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'), ('security', '账户安全', 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z M9 12l2 2 4-4'), ('updates', '系统更新', 'M20 7v5h-5 M4 17v-5h5 M6 7a7 7 0 0 1 12-2l2 2 M4 17l2 2a7 7 0 0 0 12-2')] %}
+        <button type="button" class="settings-tab" id="settings-tab-{{ key }}" role="tab" data-settings-tab="{{ key }}" aria-controls="settings-panel-{{ key }}" aria-selected="{{ 'true' if active_tab == key else 'false' }}" tabindex="{{ '0' if active_tab == key else '-1' }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ path }}"/></svg>{{ label }}</button>
+        {% endfor %}
     </div>
-    
-    {% if success %}
-    <div class="message message-success">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 6L9 17l-5-5"/>
-        </svg>
-        {{ success }}
-    </div>
-    {% endif %}
-    
-    {% if error %}
-    <div class="message message-error">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
-        </svg>
-        {{ error }}
-    </div>
-    {% endif %}
-    
-    <section class="settings-card" id="systemUpdate" aria-labelledby="updateTitle">
-        <div class="card-header">
-            <h2 class="card-title" id="updateTitle">系统更新</h2>
-            <span class="update-repo">GitHub · server-monitor</span>
+    <section id="settings-panel-account" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-account" tabindex="0" {% if active_tab != 'account' %}hidden{% endif %}>
+        <div class="settings-section-heading"><h2>账户资料</h2><p>更新你的登录名称和联系邮箱。</p></div>
+        <div class="settings-columns">
+            <section class="settings-card">
+                <header class="settings-card-heading"><h3>基本信息</h3><p>这些信息用于识别和管理你的账户。</p></header>
+                <form method="post" action="/settings/profile">
+                    <div class="settings-form-field"><label for="username">用户名 <span>必填</span></label><input type="text" id="username" name="username" required value="{{ account_name }}" minlength="3" maxlength="50" autocomplete="username" aria-describedby="usernameHint"><p class="settings-form-hint" id="usernameHint">3–50 个字符，修改后需要重新登录。</p></div>
+                    <div class="settings-form-field"><label for="email">联系邮箱 <span>选填</span></label><input type="email" id="email" name="email" autocomplete="email" value="{{ admin.email if admin and admin.email else '' }}" placeholder="name@example.com"><p class="settings-form-hint">用于保存账户联系信息，通知收件人请在通知页面设置。</p></div>
+                    <div class="settings-form-footer"><span>保存后立即生效</span><button type="submit" class="btn-save">保存资料</button></div>
+                </form>
+            </section>
+            <aside class="settings-aside">
+                <section class="settings-card settings-account-summary"><span class="settings-avatar is-large" aria-hidden="true">{{ account_name[:1]|upper }}</span><h3>{{ account_name }}</h3><p>管理员账户</p><span class="settings-status {{ 'is-inactive' if admin and not admin.is_active else '' }}">{{ ('账户正常' if admin.is_active else '已禁用') if admin else '应急账户' }}</span><dl class="settings-facts"><div><dt>上次登录</dt><dd>{{ admin.last_login.strftime('%Y-%m-%d %H:%M') if admin and admin.last_login else '暂无记录' }}</dd></div><div><dt>创建时间</dt><dd>{{ admin.created_at.strftime('%Y-%m-%d %H:%M') if admin and admin.created_at else '暂无记录' }}</dd></div></dl></section>
+                <p class="settings-side-note">{% if not admin %}当前使用应急账户登录，数据库恢复后可编辑账户资料。{% else %}需要更改密码？切换到「账户安全」管理登录凭据。{% endif %}</p>
+            </aside>
         </div>
-        <div class="update-versions">
-            <div><span class="label">当前版本</span><strong id="updateCurrent">正在读取…</strong></div>
-            <div><span class="label">最新版本</span><strong id="updateLatest">尚未检查</strong></div>
-        </div>
-        <p id="updateMessage" role="status" aria-live="polite">正在读取升级状态…</p>
-        <progress id="updateProgress" max="100" value="0" hidden aria-label="升级进度"></progress>
-        <p id="updateCapability" class="settings-form-hint"></p>
-        <div class="update-actions">
-            <button type="button" class="btn-save" id="updateCheck">检查更新</button>
-            <button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button>
-            <button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button>
-            <button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button>
-        </div>
-        <details id="updateRelease" hidden>
-            <summary>查看更新说明</summary>
-            <pre id="updateNotes"></pre>
-            <a id="updateReleaseLink" target="_blank" rel="noopener noreferrer">在 GitHub 查看版本</a>
-        </details>
-        <div class="update-backup-header">
-            <h3>程序备份</h3>
-            <button type="button" class="btn btn-secondary" id="updateBackup">创建备份</button>
-        </div>
-        <p class="settings-form-hint">应用更新前自动备份。备份仅包含程序和依赖环境信息，不包含数据库、账号密码和自定义配置；回滚不会恢复数据库结构。</p>
-        <ul id="updateBackups" class="update-backups"><li>正在读取备份…</li></ul>
     </section>
-
-    <!-- 账户信息卡片 -->
-    <div class="settings-card">
-        <div class="card-header">
-            <h2 class="card-title">
-                <span class="icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                        <circle cx="12" cy="7" r="4"/>
-                    </svg>
-                </span>
-                账户信息
-            </h2>
+    <section id="settings-panel-security" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-security" tabindex="0" {% if active_tab != 'security' %}hidden{% endif %}>
+        <div class="settings-section-heading"><h2>账户安全</h2><p>管理登录密码，了解当前会话。</p></div>
+        <div class="settings-columns">
+            <section class="settings-card">
+                <header class="settings-card-heading"><h3>修改密码</h3><p>使用当前密码验证后，即可设置新的登录密码。</p></header>
+                <form method="post" action="/settings/password">
+                    <div class="settings-form-field"><label for="old_password">当前密码</label><input type="password" id="old_password" name="old_password" required autocomplete="current-password" placeholder="输入当前密码"></div>
+                    <div class="settings-form-field"><label for="new_password">新密码</label><input type="password" id="new_password" name="new_password" required autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" aria-describedby="passwordHint"><p class="settings-form-hint" id="passwordHint">建议组合使用字母、数字与符号。</p></div>
+                    <div class="settings-form-field"><label for="confirm_password">确认新密码</label><input type="password" id="confirm_password" name="confirm_password" required autocomplete="new-password" minlength="6" placeholder="再次输入新密码"></div>
+                    <p class="settings-form-error" id="passwordFeedback" role="alert" hidden></p>
+                    <div class="settings-form-footer"><span>请妥善保管你的登录凭据</span><button type="submit" class="btn-save">更新密码</button></div>
+                </form>
+            </section>
+            <aside class="settings-aside"><section class="settings-card"><header class="settings-card-heading"><h3>登录与会话</h3></header><dl class="settings-facts"><div><dt>当前账户</dt><dd>{{ account_name }}</dd></div><div><dt>会话有效期</dt><dd>24 小时</dd></div></dl><p class="settings-side-note">在共享设备上使用完毕后，记得退出当前会话。</p><a class="settings-signout" href="/logout">退出当前登录 <span aria-hidden="true">↗</span></a></section><p class="settings-side-note">定期更新密码，并避免在不同服务中使用相同密码。</p></aside>
         </div>
-        
-        <div class="settings-info-grid">
-            <div class="settings-info-card">
-                <div class="label">用户名</div>
-                <div class="value">{{ admin.username if admin else username }}</div>
-            </div>
-            <div class="settings-info-card">
-                <div class="label">邮箱</div>
-                <div class="value">{{ admin.email if admin and admin.email else '未设置' }}</div>
-            </div>
-            <div class="settings-info-card">
-                <div class="label">账户状态</div>
-                <div class="value status-ok">{{ '正常' if admin and admin.is_active else '已禁用' }}</div>
-            </div>
-            <div class="settings-info-card">
-                <div class="label">上次登录</div>
-                <div class="value">{{ admin.last_login.strftime('%Y-%m-%d %H:%M') if admin and admin.last_login else '首次登录' }}</div>
-            </div>
-        </div>
-        
-        <form method="post" action="/settings/profile">
-            <div class="settings-form-grid">
-                <div class="settings-form-field">
-                    <label for="username">用户名</label>
-                    <input type="text" id="username" name="username" required 
-                           value="{{ admin.username if admin else username }}"
-                           minlength="3" maxlength="50"
-                           placeholder="请输入新用户名">
-                    <span class="settings-form-hint">修改用户名后需要重新登录</span>
-                </div>
-                
-                <div class="settings-form-field">
-                    <label for="email">邮箱（可选）</label>
-                    <input type="email" id="email" name="email" 
-                           value="{{ admin.email if admin and admin.email else '' }}"
-                           placeholder="请输入邮箱地址">
-                </div>
-            </div>
-            
-            <button type="submit" class="btn-save">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                    <polyline points="17,21 17,13 7,13 7,21"/>
-                    <polyline points="7,3 7,8 15,8"/>
-                </svg>
-                保存修改
-            </button>
-        </form>
-    </div>
-    
-    <!-- 修改密码卡片 -->
-    <div class="settings-card">
-        <div class="card-header">
-            <h2 class="card-title">
-                <span class="icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                    </svg>
-                </span>
-                修改密码
-            </h2>
-        </div>
-        
-        <form method="post" action="/settings/password">
-            <div class="settings-form-single">
-                <div class="settings-form-field">
-                    <label for="old_password">当前密码</label>
-                    <input type="password" id="old_password" name="old_password" required
-                           autocomplete="current-password"
-                           placeholder="请输入当前密码">
-                </div>
-            </div>
-            
-            <div class="settings-form-grid">
-                <div class="settings-form-field">
-                    <label for="new_password">新密码</label>
-                    <input type="password" id="new_password" name="new_password" required
-                           autocomplete="new-password"
-                           minlength="6"
-                           placeholder="请输入新密码">
-                    <span class="settings-form-hint">密码长度至少 6 位</span>
-                </div>
-                
-                <div class="settings-form-field">
-                    <label for="confirm_password">确认新密码</label>
-                    <input type="password" id="confirm_password" name="confirm_password" required
-                           autocomplete="new-password"
-                           minlength="6"
-                           placeholder="请再次输入新密码">
-                </div>
-            </div>
-            
-            <button type="submit" class="btn-save">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                </svg>
-                修改密码
-            </button>
-        </form>
-    </div>
-    
-    <!-- 安全信息卡片 -->
-    <div class="settings-card">
-        <div class="card-header">
-            <h2 class="card-title">
-                <span class="icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                    </svg>
-                </span>
-                安全信息
-            </h2>
-        </div>
-        
-        <div class="settings-info-grid">
-            <div class="settings-info-card">
-                <div class="label">账户创建时间</div>
-                <div class="value">{{ admin.created_at.strftime('%Y-%m-%d %H:%M') if admin and admin.created_at else '未知' }}</div>
-            </div>
-            <div class="settings-info-card">
-                <div class="label">会话有效期</div>
-                <div class="value">24 小时</div>
-            </div>
-        </div>
-        
-        <div class="settings-security-note">
-            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <span>如需在所有设备上登出账户，请点击页面右上角的「登出」按钮。建议定期更改密码以保障账户安全。</span>
-        </div>
-    </div>
+    </section>
+    <section id="settings-panel-updates" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-updates" tabindex="0" {% if active_tab != 'updates' %}hidden{% endif %}>
+        <div class="settings-section-heading"><h2>系统更新</h2><p>检查新版本，管理程序更新与备份。</p></div>
+        <section class="settings-card" id="systemUpdate" aria-labelledby="updateTitle">
+            <header class="settings-card-heading update-heading"><div><h3 id="updateTitle">版本与更新</h3><p>保持监控面板为最新可用版本。</p></div><span class="update-repo">GitHub / server-monitor</span></header>
+            <div class="update-versions"><div><span class="label">当前版本</span><strong id="updateCurrent">正在读取…</strong><span class="version-caption">当前正在运行</span></div><div><span class="label">最新版本</span><strong id="updateLatest">尚未检查</strong><span class="version-caption">已发布的稳定版本</span></div></div>
+            <div class="update-status-box"><p id="updateMessage" role="status" aria-live="polite">正在读取升级状态…</p><progress id="updateProgress" max="100" value="0" hidden aria-label="升级进度"></progress><p id="updateCapability" class="settings-form-hint"></p></div>
+            <div class="update-actions"><button type="button" class="btn-save" id="updateCheck">检查更新</button><button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button><button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button><button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button></div>
+            <details id="updateRelease" hidden><summary>查看更新说明</summary><pre id="updateNotes"></pre><a id="updateReleaseLink" target="_blank" rel="noopener noreferrer">在 GitHub 查看版本 ↗</a></details>
+            <div class="update-backup-section"><div class="update-backup-header"><div><h3>程序备份</h3><p class="settings-form-hint">应用更新前自动备份，也可以手动创建。</p></div><button type="button" class="btn btn-secondary" id="updateBackup">创建备份</button></div><ul id="updateBackups" class="update-backups"><li>正在读取备份…</li></ul><p class="settings-form-hint">备份包含程序和依赖环境信息，不包含数据库、账号密码和自定义配置；回滚不会恢复数据库结构。</p></div>
+        </section>
+    </section>
 </div>
 {% endblock %}
-
-{% block scripts %}
-<script src="/static/js/settings.js"></script>
-<script src="/static/js/updates.js?v=1"></script>
-{% endblock %}
+{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=1"></script>{% endblock %}

@@ -63,20 +63,22 @@ async def _init_database(config):
     """
     初始化数据库
     
-    1. 初始化数据库连接并创建表
+    1. 初始化数据库连接，建表并补齐已发布的缺失字段和索引
     2. 将 YAML 配置同步到数据库
     3. 从数据库加载历史心跳记录
     """
     global _db_available
     
-    logger.info("正在初始化数据库...")
+    logger.info("正在初始化数据库并检查表结构...")
+    _db_available = False
+    from app.models.schema import SchemaMigrationError
     
     try:
         from app.models.base import init_db
         from app.models.admin import Admin  # 确保 Admin 表会被创建
         from app.repositories.mysql_repository import get_mysql_repository
         
-        # 初始化数据库引擎并创建表 (异步)
+        # 初始化数据库并完成增量升级；此后才能启动仓库和调度器
         await init_db(
             host=config.database.mysql_host,
             port=config.database.mysql_port,
@@ -89,7 +91,7 @@ async def _init_database(config):
         )
         
         _db_available = True
-        logger.info("数据库初始化完成，表结构已创建")
+        logger.info("数据库初始化完成，表结构已检查并补齐")
         
         # 获取仓库实例
         repo = get_mysql_repository()
@@ -145,6 +147,10 @@ async def _init_database(config):
         else:
             logger.info("没有找到历史样本")
         
+    except SchemaMigrationError:
+        _db_available = False
+        logger.exception("数据库结构升级未完成，已停止启动；修复数据库权限或错误后重启")
+        raise
     except Exception as e:
         logger.warning(f"数据库初始化失败: {e}")
         logger.info("进入内存模式运行（数据不会持久化）")

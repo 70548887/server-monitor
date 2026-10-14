@@ -4,6 +4,7 @@ import logging
 import os
 import httpx
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request, Response, Form, Depends, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -272,6 +273,7 @@ async def settings_page(
             "request": request,
             "username": session_data.get("username"),
             "admin": admin,
+            "settings_tab": request.query_params.get("tab") if request.query_params.get("tab") in {"account", "security", "updates"} else "account",
             "success": request.query_params.get("success"),
             "error": request.query_params.get("error"),
         }
@@ -300,7 +302,7 @@ async def change_password(
     # 检查新密码确认
     if new_password != confirm_password:
         return RedirectResponse(
-            url="/settings?error=两次输入的新密码不一致",
+            url="/settings?" + urlencode({"tab": "security", "error": "两次输入的新密码不一致"}),
             status_code=302
         )
     
@@ -309,9 +311,9 @@ async def change_password(
     
     if success:
         logger.info(f"管理员密码已修改: {session_data.get('username')}")
-        return RedirectResponse(url="/settings?success=密码修改成功", status_code=302)
+        return RedirectResponse(url="/settings?" + urlencode({"tab": "security", "success": "密码修改成功"}), status_code=302)
     else:
-        return RedirectResponse(url=f"/settings?error={message}", status_code=302)
+        return RedirectResponse(url="/settings?" + urlencode({"tab": "security", "error": message}), status_code=302)
 
 
 @router.post("/settings/profile")
@@ -346,9 +348,9 @@ async def update_profile(
             return response
         
         logger.info(f"管理员信息已更新: {username}")
-        return RedirectResponse(url="/settings?success=信息更新成功", status_code=302)
+        return RedirectResponse(url="/settings?" + urlencode({"tab": "account", "success": "信息更新成功"}), status_code=302)
     else:
-        return RedirectResponse(url=f"/settings?error={message}", status_code=302)
+        return RedirectResponse(url="/settings?" + urlencode({"tab": "account", "error": message}), status_code=302)
 
 
 # ============= API 接口 =============
