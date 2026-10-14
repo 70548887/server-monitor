@@ -25,7 +25,7 @@ from typing import Optional, List
 
 from sqlalchemy import select, delete, update, func, and_, text, case, cast, Integer, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ..models.base import (
     get_session_context, 
@@ -36,6 +36,8 @@ from ..models.base import (
 )
 from ..models.node import NodeModel
 from ..models.sample import SampleModel, AggregateModel
+from ..models.notification_channel import AlertIncidentModel, AlertLogModel, NotificationLogModel
+from ..models.schema import NODE_TRANSACTION_TABLES
 from ..utils.timeutil import utcnow, to_utc_naive, format_iso_utc
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,10 @@ def _percentile(values: List[float], q: float) -> Optional[float]:
     hi = min(lo + 1, n - 1)
     frac = pos - lo
     return round(sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac, 2)
+
+
+class NodeNameConflict(ValueError):
+    """目标名称被其他节点或历史记录占用，调用方应返回 409。"""
 
 
 class MySQLRepository:
@@ -742,6 +748,83 @@ class MySQLRepository:
             )
             return False
     
+    async def rename_node(self, old_name: str, new_name: str, update_data: dict) -> bool:
+        """保留节点 ID，在同一事务内改名并迁移历史关联；禁止合并同名历史。"""
+        try:
+            async with self._get_session_manager() as session:
+                if session.get_bind().dialect.name in {"mysql", "mariadb"}:
+                    # 运行期不执行 DDL（会隐式提交）；旧引擎由启动升级统一转换。
+                    tables = ", ".join(f"'{table}'" for table in NODE_TRANSACTION_TABLES)
+                    engines = (await session.execute(text(
+                        "SELECT TABLE_NAME, ENGINE FROM information_schema.tables "
+                        f"WHERE table_schema = DATABASE() AND table_name IN ({tables})"
+                    ))).all()
+                    if ({row[0] for row in engines} != set(NODE_TRANSACTION_TABLES)
+                            or any(str(row[1]).lower() != "innodb" for row in engines)):
+                        raise RuntimeError("节点关联表尚未启用 InnoDB，请先重启服务完成数据库升级")
+
+                node = (await session.execute(
+                    select(NodeModel).where(
+                        NodeModel.name == old_name, NodeModel.deleted_at.is_(None),
+                    ).with_for_update()
+                )).scalar_one_or_none()
+                if node is None:
+                    return False
+
+                # 不排除软删除记录；数据库唯一索引也不排除它们。
+                conflict = (await session.execute(
+                    select(NodeModel.id).where(
+                        NodeModel.name == new_name, NodeModel.id != node.id,
+                    ).with_for_update()
+                )).first()
+                if conflict:
+                    raise NodeNameConflict("节点名称已存在，请使用其他名称")
+
+                previous_name = node.name
+                histories = (SampleModel, AggregateModel, AlertIncidentModel,
+                             AlertLogModel, NotificationLogModel)
+                if previous_name != new_name:
+                    for model in histories:
+                        # != previous_name 使用数据库自身排序规则，允许本人仅修改大小写。
+                        orphan = (await session.execute(
+                            select(model.id).where(
+                                model.node_name == new_name,
+                                model.node_name != previous_name,
+                            ).limit(1).with_for_update()
+                        )).first()
+                        if orphan:
+                            raise NodeNameConflict("该名称已有历史记录，请使用其他名称")
+                    node.name = new_name
+
+                for field in ("url", "region", "tags", "timeout_ms", "enabled"):
+                    if field in update_data:
+                        setattr(node, field, update_data[field])
+                if "expect" in update_data:
+                    node.expect_status = update_data["expect"].get("status", 200)
+                    node.expect_body_contains = update_data["expect"].get("body_contains")
+                # 先让唯一索引确认目标名称；其后的历史更新失败仍会回滚此更改。
+                await session.flush()
+                if previous_name != new_name:
+                    for model in histories:
+                        await session.execute(
+                            update(model).where(model.node_name == previous_name)
+                            .values(node_name=new_name)
+                        )
+            logger.info("节点及历史关联已重命名: %s -> %s", previous_name, new_name)
+            return True
+        except NodeNameConflict:
+            raise
+        except IntegrityError as exc:
+            original = exc.orig
+            code = original.args[0] if getattr(original, "args", ()) else None
+            if code == 1062 or "UNIQUE constraint failed" in str(original):
+                raise NodeNameConflict("节点名称已存在，请使用其他名称") from exc
+            logger.error("节点重命名失败并已回滚: %s -> %s, error=%s", old_name, new_name, exc)
+            return False
+        except Exception as exc:
+            logger.error("节点重命名失败并已回滚: %s -> %s, error=%s", old_name, new_name, exc)
+            return False
+
     async def delete_node(self, name: str, hard: bool = False) -> bool:
         """
         删除节点

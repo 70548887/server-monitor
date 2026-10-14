@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class NodeExpect(BaseModel):
@@ -81,10 +81,21 @@ class NodeCreate(BaseModel):
 
 
 class NodeUpdate(BaseModel):
-    """更新节点请求"""
+    """更新节点请求；名称可变，节点 ID 与历史关联保留。"""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="新的节点名称")
     url: Optional[str] = Field(default=None, description="心跳检测 URL")
     region: Optional[str] = Field(default=None, description="区域标签")
     tags: Optional[list[str]] = Field(default=None, description="自定义标签")
     timeout_ms: Optional[int] = Field(default=None, ge=100, le=30000, description="超时时间(毫秒)")
     enabled: Optional[bool] = Field(default=None, description="是否启用")
     expect: Optional[NodeExpect] = Field(default=None, description="期望响应")
+
+    @field_validator("name")
+    @classmethod
+    def valid_new_name(cls, value):
+        if value is not None:
+            if not value.strip():
+                raise ValueError("节点名称不能为空")
+            if "/" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise ValueError("节点名称不能包含斜杠或控制字符")
+        return value

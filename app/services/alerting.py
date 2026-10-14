@@ -758,6 +758,30 @@ class AlertingService:
                 for name in self._states
             }
     
+    async def rename_node(self, old_name: str, new_name: str):
+        """Keep failure counts and suppression windows when a node is renamed."""
+        if old_name == new_name:
+            return
+        with self._lock:
+            state = self._states.pop(old_name, None)
+            self._states.pop(new_name, None)
+            if state is not None:
+                state.node_name = new_name
+                self._states[new_name] = state
+
+        if not self._config.suppress_persist:
+            return
+        # Network I/O belongs outside the threading lock. The database rename
+        # has already committed; an optional-cache failure must not undo memory
+        # state or make the caller report that the node rename itself failed.
+        try:
+            from ..repositories.redis_repository import get_redis_repository
+            repo = get_redis_repository()
+            if repo.is_connected():
+                await repo.rename_node_state(old_name, new_name)
+        except Exception:
+            logger.warning("Redis node-state rename failed; keeping renamed memory state", exc_info=True)
+
     def clear_suppression(
         self,
         node_name: str,

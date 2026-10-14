@@ -3,12 +3,18 @@
 import hashlib
 import logging
 from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
+
+# 节点名称作为历史数据关联键；重命名必须让这些表在同一事务内提交或回滚。
+NODE_TRANSACTION_TABLES = (
+    "nodes", "samples", "aggregates", "alert_incidents", "alert_logs", "notification_logs",
+)
 
 
 class SchemaMigrationError(RuntimeError):
@@ -66,15 +72,6 @@ async def _upgrade_incident_schema(conn, report: Callable[[str], None]) -> int:
         report("新增表 alert_incidents")
         added += 1
 
-    engine_name = (await conn.execute(text(
-        "SELECT ENGINE FROM information_schema.tables "
-        "WHERE table_schema = DATABASE() AND table_name = 'alert_incidents'"
-    ))).scalar()
-    if str(engine_name).lower() != "innodb":
-        await conn.execute(text("ALTER TABLE alert_incidents ENGINE=InnoDB"))
-        report("alert_incidents 已转为 InnoDB")
-        added += 1
-
     for table in ("alert_logs", "notification_logs"):
         for column, comment in (
             ("incident_id", "所属故障事件ID"),
@@ -105,6 +102,26 @@ async def _upgrade_incident_schema(conn, report: Callable[[str], None]) -> int:
     return added
 
 
+async def _ensure_node_transaction_engines(conn, report: Callable[[str], None]) -> int:
+    """旧导入库可能使用 MyISAM；在启动升级锁内逐表补齐事务支持。"""
+    converted = 0
+    for table in NODE_TRANSACTION_TABLES:
+        engine_name = (await conn.execute(text(
+            "SELECT ENGINE FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() AND table_name = :t"
+        ), {"t": table})).scalar()
+        # create_tables=False 的手动升级可运行于部分旧库，缺表仍由建表入口负责。
+        if engine_name is None or str(engine_name).lower() == "innodb":
+            continue
+        started = perf_counter()
+        report(f"正在将 {table} 从 {engine_name} 转为 InnoDB，数据较多时需要等待")
+        # 表名仅来自上面的固定列表，不接受用户输入。
+        await conn.execute(text(f"ALTER TABLE {table} ENGINE=InnoDB"))
+        report(f"{table} 已转为 InnoDB，耗时 {perf_counter() - started:.2f} 秒")
+        converted += 1
+    return converted
+
+
 async def ensure_schema(
     engine: AsyncEngine,
     *,
@@ -127,6 +144,7 @@ async def ensure_schema(
                 if create_tables:
                     await conn.run_sync(Base.metadata.create_all)
                 added = await _upgrade_incident_schema(conn, report)
+                added += await _ensure_node_transaction_engines(conn, report)
                 await conn.commit()
         except Exception as exc:
             if isinstance(exc, SchemaMigrationError):

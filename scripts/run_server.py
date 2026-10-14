@@ -98,7 +98,7 @@ if __name__ == "__main__":
         os.execv(restored_python, [restored_python, str(ROOT / "scripts/run_server.py"), *sys.argv[1:]])
 
 import httpx
-from app.services.update_network import load_update_proxy
+from app.services.update_network import load_update_proxy, ensure_proxy_enabled
 from app.services.update_runtime import (
     RuntimeStore, UpdateError, OperationLock, atomic_json, read_json, package_version,
     file_hashes, apply_files, validate_lock, quiet_process_options, UpdateBusy,
@@ -203,6 +203,7 @@ class ServerManager:
         proxy_url = ""
         if use_update_proxy:
             network = load_update_proxy(self.root)
+            ensure_proxy_enabled(network)
             proxy_url = network["url"]
             # 清除大小写混用的继承值，避免 NO_PROXY 绕过本页选择的代理。
             # 关闭时仅停用本页代理，用户自己的 pip 配置文件仍保持原有语义。

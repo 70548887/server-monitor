@@ -34,6 +34,7 @@ class SampleModel(Base):
     __table_args__ = (
         Index("ix_samples_node_timestamp", "node_name", "timestamp"),
         Index("ix_samples_timestamp_success", "timestamp", "success"),
+        {"mysql_engine": "InnoDB"},
     )
 
     def __repr__(self):
@@ -92,6 +93,7 @@ class AggregateModel(Base):
     # 复合索引
     __table_args__ = (
         Index("ix_aggregates_node_window", "node_name", "window_start"),
+        {"mysql_engine": "InnoDB"},
     )
 
     def __repr__(self):

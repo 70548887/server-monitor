@@ -183,20 +183,23 @@ async def test_status_poll_keeps_unsaved_proxy_edits_and_disables_busy_save(prox
     draft = "http://draft-user:draft-secret@127.0.0.1:9999"
     await page.locator("#updateProxyUrl").fill(draft)
     await page.locator("#updateProxyEnabled").uncheck()
-    started, release = asyncio.Event(), asyncio.Event()
-    original_check = svc.check
+    import threading
+    started, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    original_backup = svc.store.backup
 
-    async def delayed_check():
-        started.set()
-        await release.wait()
-        await original_check()
+    def delayed_backup():
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        return original_backup()
 
-    monkeypatch.setattr(svc, "check", delayed_check)
+    # 备份不访问网络，可在代理编辑期间执行；其状态轮询仍不得覆盖输入。
+    monkeypatch.setattr(svc.store, "backup", delayed_backup)
     try:
         async with page.expect_response(lambda response:
             response.url.endswith("/api/system/update/status"), timeout=8000
         ) as pending:
-            await page.locator("#updateCheck").click()
+            await page.locator("#updateBackup").click()
             await asyncio.wait_for(started.wait(), 5)
             await expect(page.locator("#updateProxySave")).to_be_disabled()
         assert (await pending.value).status == 200
@@ -207,7 +210,7 @@ async def test_status_poll_keeps_unsaved_proxy_edits_and_disables_busy_save(prox
         release.set()
         if svc.task:
             await svc.task
-    await expect(page.locator("#updateLatest")).to_have_text("v1.1.0", timeout=8000)
+    await expect(page.locator("#updateMessage")).to_contain_text("程序备份已创建", timeout=8000)
     await expect(page.locator("#updateProxySave")).to_be_enabled()
     await expect(page.locator("#updateProxyUrl")).to_have_value(draft)
     await expect(page.locator("#updateProxyEnabled")).not_to_be_checked()
@@ -286,3 +289,36 @@ async def test_proxy_visibility_toggle_and_save_clear_reset(proxy_browser):
     await expect(field).to_have_attribute("type", "password")
     assert not svc.status()["proxy"]["configured"]
     assert not errors
+
+
+async def test_disabled_saved_proxy_is_enabled_before_checking(proxy_browser):
+    from playwright.async_api import expect
+    page, url, svc, requests, errors = proxy_browser
+    svc.save_proxy(False, PROXY_URL)
+    await open_proxy_settings(page, url)
+    await expect(page.locator("#updateCheck")).to_have_text("启用代理并检查")
+    await expect(page.locator("#updateProxyEnabled")).not_to_be_checked()
+    posts=[]
+    page.on("request",lambda request:posts.append(request.url.rsplit("/",1)[-1])
+            if request.method=="POST" and "/api/system/update/" in request.url else None)
+    await page.locator("#updateCheck").click()
+    await expect(page.locator("#updateLatest")).to_have_text("v1.1.0")
+    assert posts[:2]==["proxy","check"]
+    assert svc.status()["proxy"]["enabled"]
+    await expect(page.locator("#updateProxyEnabled")).to_be_checked()
+    assert requests and not errors
+
+
+async def test_unsaved_proxy_edits_do_not_start_update_with_old_configuration(proxy_browser):
+    from playwright.async_api import expect
+    page, url, svc, requests, errors = proxy_browser
+    await open_proxy_settings(page, url)
+    await page.locator("#updateProxyUrl").fill(PROXY_URL)
+    await page.locator("#updateProxyEnabled").check()
+    await page.locator("#updateCheck").click()
+    await expect(page.locator("#updateProxyMessage")).to_contain_text("尚未保存")
+    assert not requests and svc.task is None
+    await submit_proxy(page)
+    await page.locator("#updateCheck").click()
+    await expect(page.locator("#updateLatest")).to_have_text("v1.1.0")
+    assert requests and not errors

@@ -13,6 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import get_config, NodeConfig, publish_node_snapshot
 from .heartbeat import HeartbeatService, HeartbeatResult
 from .observability import metrics
+from .node_identity import serialize_node_mutation
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class SchedulerService:
         """设置心跳结果回调（用于持久化和告警）"""
         self._on_results_callback = callback
     
+    @serialize_node_mutation
     async def _get_nodes_from_db(self) -> list:
         """从数据库获取节点列表"""
         try:
@@ -108,6 +110,7 @@ class SchedulerService:
             metrics.record_heartbeat_run(duration, success)
             metrics.scheduler_stats.status = "running" if success else "error"
     
+    @serialize_node_mutation
     async def _run_rollup_task(self):
         """
         把原始样本汇总为聚合快照

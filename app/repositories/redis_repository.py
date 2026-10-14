@@ -223,6 +223,44 @@ class RedisRepository:
             )
             return None
     
+    async def rename_node_state(self, old_name: str, new_name: str) -> bool:
+        """Atomically move node caches, preserving TTLs and replacing stale targets.
+
+        Missing source keys also clear their destination, so a reused node name
+        cannot inherit suppression from a previously deleted node. A Redis
+        outage is best-effort and never rolls back the committed database rename.
+        """
+        if old_name == new_name:
+            return True
+        try:
+            client = await self._get_client()
+            key_templates = [
+                "alert:suppress:{}:node_down",
+                "alert:suppress:{}:node_recovery",
+                "alert:suppress:{}:latency_high",
+                "node:{}:status",
+                "node:{}:errors",
+            ]
+            keys = [
+                f"{self._prefix}{template.format(name)}"
+                for template in key_templates
+                for name in (old_name, new_name)
+            ]
+            await client.eval("""
+                for i = 1, #KEYS, 2 do
+                    if redis.call('EXISTS', KEYS[i]) == 1 then
+                        redis.call('RENAME', KEYS[i], KEYS[i + 1])
+                    else
+                        redis.call('DEL', KEYS[i + 1])
+                    end
+                end
+                return 1
+            """, len(keys), *keys)
+            return True
+        except Exception:
+            logger.warning("Redis node-state rename failed; using renamed memory state", exc_info=True)
+            return False
+
     async def rate_limit_increment(self, key: str, window_seconds: int) -> int:
         """限流专用严格接口：原子计数/过期，连接异常交给调用方降级。"""
         client = await self._get_client()

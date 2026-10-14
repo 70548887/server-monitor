@@ -42,6 +42,7 @@ from app import __version__
 from app.logging import init_async_logging, shutdown_logging
 from app.services.config import load_config, get_config
 from app.services.scheduler import get_scheduler
+from app.services.node_identity import serialize_node_mutation
 from app.services.observability import metrics
 from app.services.availability import get_availability_service, HeartbeatRecord
 from app.services.auth import create_default_admin
@@ -287,6 +288,7 @@ async def lifespan(app: FastAPI):
     scheduler = get_scheduler()
     
     # 设置心跳结果回调 - 更新可用性数据、持久化、告警评估
+    @serialize_node_mutation
     async def on_heartbeat_results(results):
         """心跳检测完成后的回调"""
         global _db_available
