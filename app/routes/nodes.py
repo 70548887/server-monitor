@@ -11,6 +11,8 @@ from ..schemas.node import NodeConfig, NodeStatus, NodeCreate, NodeUpdate, NodeE
 from ..services.config import get_config, NodeConfig as RuntimeNodeConfig, publish_node_snapshot
 from ..services.scheduler import get_scheduler
 from ..services.availability import get_availability_service, AvailabilityService
+from ..services.node_identity import node_mutation_lock, serialize_node_mutation
+from ..repositories.mysql_repository import NodeNameConflict
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,8 @@ async def _persist_node(method: str, *args, **kwargs):
         raise HTTPException(status_code=503, detail="数据库不可用，节点未保存")
     try:
         result = await getattr(repo, method)(*args, **kwargs)
+    except NodeNameConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": "E002", "message": str(exc)}) from exc
     except Exception as exc:
         logger.warning("节点持久化失败: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="数据库操作失败，节点未保存") from exc
@@ -242,6 +246,7 @@ async def get_node(name: str):
 
 
 @router.post("", response_model=NodeStatus, status_code=201)
+@serialize_node_mutation
 async def create_node(node: NodeCreate):
     """
     创建新的监控节点
@@ -294,6 +299,7 @@ async def create_node(node: NodeCreate):
 
 
 @router.put("/{name}", response_model=NodeStatus)
+@serialize_node_mutation
 async def update_node(name: str, update: NodeUpdate):
     """
     更新监控节点配置
@@ -333,24 +339,41 @@ async def update_node(name: str, update: NodeUpdate):
         }
     
     # 持久化到数据库
-    runtime = RuntimeNodeConfig.from_database({**node, **update_data})
-    await _db_update_node(name, update_data)
-    logger.info(f"Node updated: {name}")
-    previous = next((n for n in get_config().nodes if n.name == name), None)
-    _publish_node(runtime)
-    
-    # 更新缓存状态
-    cached = _get_node_status(name)
+    old_name = node["name"]
+    new_name = update.name if update.name is not None else old_name
+    renamed = new_name != old_name
+    runtime = RuntimeNodeConfig.from_database({**node, **update_data, "name": new_name})
+    if renamed:
+        await _persist_node("rename_node", old_name, new_name, update_data)
+    else:
+        await _db_update_node(old_name, update_data)
+    logger.info("Node updated: %s -> %s", old_name, new_name)
+    config = get_config()
+    previous = next((n for n in config.nodes if n.name == old_name), None)
+    if renamed:
+        # 同一临界区内发布新身份；进行中的旧名称结果会被版本检查丢弃。
+        publish_node_snapshot(config, [n for n in config.nodes if n.name not in {old_name, new_name}] + [runtime])
+    else:
+        _publish_node(runtime)
+
+    cached = _get_node_status(old_name)
     if cached and (cached.url != runtime.url or (previous and previous.probe_key() != runtime.probe_key())):
         cached = None
-    fields = dict(name=name, url=runtime.url, region=runtime.region, tags=list(runtime.tags), enabled=runtime.enabled)
+    fields = dict(name=new_name, url=runtime.url, region=runtime.region, tags=list(runtime.tags), enabled=runtime.enabled)
     cached = cached.model_copy(update=fields, deep=True) if cached else NodeStatus(**fields)
-    _update_node_status(name, cached)
+    if renamed:
+        _node_status_cache.pop(old_name, None)
+        get_availability_service().rename_node(old_name, new_name)
+    _update_node_status(new_name, cached)
+    if renamed:
+        from ..services.alerting import get_alerting_service
+        await get_alerting_service().rename_node(old_name, new_name)
     
     return cached
 
 
 @router.delete("/{name}")
+@serialize_node_mutation
 async def delete_node(name: str, hard: bool = Query(False, description="是否硬删除")):
     """
     删除监控节点
@@ -402,36 +425,38 @@ async def delete_node(name: str, hard: bool = Query(False, description="是否�
 async def ping_node(name: str):
     """
     手动触发单个节点的心跳检测
-    
+
     立即执行一次检测并返回结果。
     """
-    # 从数据库查找节点
-    repo = _get_db_repository()
-    node = None
-    if repo:
-        try:
-            node = await repo.get_node_by_name(name)
-        except Exception as e:
-            logger.error(f"从数据库获取单个节点失败: {e}")
-    
-    if not node:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "E003", "message": f"Node not found: {name}"},
-        )
-    
-    # 执行心跳检测
-    from ..services.heartbeat import HeartbeatService
-    
-    service = HeartbeatService()
-    
-    try:
+    async with node_mutation_lock():
+        # 从数据库查找节点
+        repo = _get_db_repository()
+        node = None
+        if repo:
+            try:
+                node = await repo.get_node_by_name(name)
+            except Exception as e:
+                logger.error(f"从数据库获取单个节点失败: {e}")
+
+        if not node:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "E003", "message": f"Node not found: {name}"},
+            )
         runtime = RuntimeNodeConfig.from_database(node)
         _publish_node(runtime)
+
+    # 执行心跳检测
+    from ..services.heartbeat import HeartbeatService
+
+    service = HeartbeatService()
+
+    try:
         # check_node 本身允许人工检测禁用节点，保留真实配置版本用于拒绝迟到结果。
         result = await service.check_node(runtime)
-        accepted = update_node_status_from_result(name, result, node, allow_disabled=True)
-        
+        async with node_mutation_lock():
+            accepted = update_node_status_from_result(name, result, node, allow_disabled=True)
+
         return {
             "node": name,
             "timestamp": result.timestamp.isoformat() + "Z",
@@ -442,12 +467,13 @@ async def ping_node(name: str):
             "error_message": result.error_message,
             "applied": accepted,
         }
-    
+
     finally:
         await service.close()
 
 
 @router.post("/reload")
+@serialize_node_mutation
 async def reload_node_config():
     """从数据库刷新节点配置与状态缓存；不触发探测或导入 YAML。"""
     global _node_status_cache

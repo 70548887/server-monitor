@@ -2,6 +2,13 @@
 
 {% block title %}{{ title }}{% endblock %}
 
+{% block head %}
+<style>
+#editNodeModal { padding: 16px; }
+#editNodeModal .modal-content { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="nodes-page">
     <h1>节点列表</h1>
@@ -51,7 +58,7 @@
             {% for node in nodes %}
             <tr data-node="{{ node.name }}">
                 <td class="index-cell">{{ loop.index }}</td>
-                <td class="name-cell" title="{{ node.name }}"><a href="/ui/nodes/{{ node.name }}">{{ node.name }}</a></td>
+                <td class="name-cell" title="{{ node.name }}"><a href="/ui/nodes/{{ node.name | urlencode }}">{{ node.name }}</a></td>
                 <td class="url-cell" title="{{ node.url }}">{{ node.url[:40] }}{% if node.url|length > 40 %}...{% endif %}</td>
                 <td>{{ node.region }}</td>
                 <td class="tags-cell">
@@ -143,6 +150,11 @@
         <form id="editNodeForm">
             <input type="hidden" name="originalName" id="editOriginalName">
             <div class="form-group">
+                <label for="editName">节点名称 <span class="required">*</span></label>
+                <input type="text" name="name" id="editName" required maxlength="100" placeholder="请输入节点名称">
+                <small class="form-hint">修改名称会同步关联历史记录，节点 ID 保持不变。</small>
+            </div>
+            <div class="form-group">
                 <label>URL <span class="required">*</span></label>
                 <input type="url" name="url" id="editUrl" required placeholder="https://example.com/health">
             </div>
@@ -186,5 +198,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/nodes.js"></script>
+<script src="/static/js/nodes.js?v=rename-1"></script>
 {% endblock %}

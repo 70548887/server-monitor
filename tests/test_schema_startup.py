@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from app.models import base
-from app.models.schema import SchemaMigrationError, ensure_schema
+from app.models.schema import NODE_TRANSACTION_TABLES, SchemaMigrationError, ensure_schema
 
 
 class ScalarResult:
@@ -25,13 +25,21 @@ class SchemaConnection:
     def __init__(self):
         self.engine = create_engine("sqlite:///:memory:")
         self.raw = self.engine.connect()
-        self.table_engine = "InnoDB"
+        self.table_engines = {}
         self.statements = []
         self.lock = asyncio.Lock()
         self.lock_result = 1
         self.fail_on = None
         self.invalidated = False
         self.created_under_lock = []
+
+    @property
+    def table_engine(self):
+        return self.table_engines.get("alert_incidents", "InnoDB")
+
+    @table_engine.setter
+    def table_engine(self, value):
+        self.table_engines["alert_incidents"] = value
 
     async def execute(self, statement, params=None):
         sql = str(statement)
@@ -55,11 +63,14 @@ class SchemaConnection:
             indexes = inspect(self.raw).get_indexes(params["t"])
             return ScalarResult(sum(i["name"] == params["i"] for i in indexes))
         if "SELECT ENGINE" in sql:
-            return ScalarResult(self.table_engine)
+            table = params.get("t", "alert_incidents")
+            if not inspect(self.raw).has_table(table):
+                return ScalarResult(None)
+            return ScalarResult(self.table_engines.get(table, "InnoDB"))
         if "information_schema.tables" in sql:
             return ScalarResult(int(inspect(self.raw).has_table("alert_incidents")))
-        if sql == "ALTER TABLE alert_incidents ENGINE=InnoDB":
-            self.table_engine = "InnoDB"
+        if sql.startswith("ALTER TABLE ") and sql.endswith(" ENGINE=InnoDB"):
+            self.table_engines[sql.split()[2]] = "InnoDB"
             return ScalarResult(None)
         return self.raw.execute(text(sql.split(" COMMENT ", 1)[0]), params)
 
@@ -235,3 +246,30 @@ async def test_bootstrap_uses_same_upgrade_path(monkeypatch):
     assert await bootstrap_database.run_phase2_migration(AppConfig()) == 4
     upgrade.assert_awaited_once_with(engine, create_tables=False, report=bootstrap_database.log)
     engine.dispose.assert_awaited_once()
+
+
+async def test_all_node_history_tables_convert_once_with_duration_logs(schema_store):
+    conn = schema_store
+    await ensure_schema(conn)
+    conn.table_engines = {table: "MyISAM" for table in NODE_TRANSACTION_TABLES}
+    messages = []
+    assert await ensure_schema(conn, report=messages.append) == len(NODE_TRANSACTION_TABLES)
+    assert all(conn.table_engines[table] == "InnoDB" for table in NODE_TRANSACTION_TABLES)
+    for table in NODE_TRANSACTION_TABLES:
+        assert any(f"正在将 {table} " in message for message in messages)
+        assert any(f"{table} 已转为 InnoDB，耗时" in message for message in messages)
+    assert await ensure_schema(conn) == 0
+
+
+async def test_node_history_engine_failure_stops_upgrade_and_is_resumable(schema_store):
+    conn = schema_store
+    await ensure_schema(conn)
+    conn.table_engines = {table: "MyISAM" for table in NODE_TRANSACTION_TABLES}
+    conn.fail_on = "ALTER TABLE samples ENGINE"
+    with pytest.raises(SchemaMigrationError):
+        await ensure_schema(conn)
+    assert not conn.lock.locked()
+    assert conn.table_engines["nodes"] == "InnoDB"
+    assert conn.table_engines["samples"] == "MyISAM"
+    conn.fail_on = None
+    assert await ensure_schema(conn) == len(NODE_TRANSACTION_TABLES) - 1

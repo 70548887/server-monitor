@@ -14,7 +14,7 @@ import httpx
 from packaging.version import Version, InvalidVersion
 
 from app import __version__
-from .update_network import load_update_proxy, proxy_status, save_update_proxy
+from .update_network import load_update_proxy, proxy_status, save_update_proxy, ensure_proxy_enabled
 from .update_runtime import (
     RuntimeStore, UpdateError, UpdateBusy, MAX_PACKAGE, BUSY,
     atomic_json, read_json, extract_package, file_hashes, package_version,
@@ -124,20 +124,37 @@ class UpdateService:
     async def _fetch(self, url, maximum, destination=None, progress=False):
         """逐跳验证URL；代理覆盖所有更新请求，令牌只发往GitHub API。"""
         config = load_update_proxy(self.store.root)
+        ensure_proxy_enabled(config)
         options = {"timeout": httpx.Timeout(40, connect=10), "transport": self.transport,
-                   "follow_redirects": False, "trust_env": False,
-                   "proxy": config["url"] if config["enabled"] else None}
+                   "follow_redirects": False, "trust_env": False}
+        # 手工覆盖代码的旧部署可能仍在使用 HTTPX 0.25.x；0.26 才加入 proxy。
+        # 0.28 则移除了 proxies，因此不能固定使用某一代参数。
+        proxy_key = "proxy" if Version(httpx.__version__) >= Version("0.26.0") else "proxies"
+        options[proxy_key] = config["url"] if config["enabled"] else None
         if config["enabled"] and self.transport is not None:
             # 显式注入的测试transport也必须覆盖代理路由，禁止测试意外真实联网。
             options["mounts"] = {"all://": self.transport}
         try:
             return await self._fetch_with_client(url, maximum, destination, progress, options)
+        except httpx.ProxyError as exc:
+            # CONNECT 认证失败在隧道握手阶段抛异常，不会形成普通 response。
+            if re.search(r"\b407\b", str(exc)):
+                raise UpdateError("代理认证失败，请检查代理用户名和密码") from None
+            raise UpdateError("升级代理连接失败，请检查代理地址、认证和连通性") from None
         except (httpx.RequestError, httpx.InvalidURL, UnicodeError):
             message = "升级代理连接失败，请检查代理地址、认证和连通性" if config["enabled"] else "连接GitHub失败，请检查网络或配置升级代理"
             raise UpdateError(message) from None
 
     async def _fetch_with_client(self, url, maximum, destination, progress, options):
-        async with httpx.AsyncClient(**options) as client:
+        try:
+            client = httpx.AsyncClient(**options)
+        except TypeError:
+            # 构造阶段尚未访问代理，固定提示避免把依赖错误误认为网络故障。
+            raise UpdateError(
+                f"更新网络组件初始化失败（HTTPX {httpx.__version__}），"
+                "请使用项目的 Python 执行 python -m pip install -r requirements.lock 后重启项目"
+            ) from None
+        async with client:
             for _ in range(6):
                 if not trusted_url(url):
                     raise UpdateError("下载被重定向到非GitHub地址")
@@ -225,10 +242,14 @@ class UpdateService:
         lock.__enter__()
         try:
             self.store.ensure_idle()
+            network = load_update_proxy(self.store.root)
+            if action in ("check", "download"):
+                ensure_proxy_enabled(network)
             if action == "check" and time.monotonic()-self._last_check < 30:
                 return self.status()
+            route_name = "通过代理" if network["enabled"] else "直连"
             self.store.status({"check":"checking", "download":"downloading", "backup":"backing_up"}[action],
-                              {"check":"正在检查GitHub版本", "download":"正在准备下载", "backup":"正在备份程序文件"}[action], 0, error=None)
+                              {"check":f"正在{route_name}检查GitHub版本", "download":f"正在{route_name}准备下载", "backup":"正在备份程序文件"}[action], 0, error=None)
             self.audit(action, actor, "started")
             active_lock = lock
             async def work():
@@ -267,6 +288,7 @@ class UpdateService:
             if package_version(self.store.root) != self.version:
                 raise UpdateError("磁盘代码与运行版本不一致，请先重启")
             if action == "apply":
+                ensure_proxy_enabled(load_update_proxy(self.store.root))
                 staged = read_json(self.store.home / "staged.json")
                 if self.store.read().get("state") != "ready" or not staged or Version(staged["version"]) <= Version(self.version):
                     raise UpdateError("请先下载并校验新版本")

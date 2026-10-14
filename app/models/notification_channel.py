@@ -129,6 +129,7 @@ class NotificationRecipientModel(Base):
 class NotificationLogModel(Base):
     """通知发送记录表"""
     __tablename__ = "notification_logs"
+    __table_args__ = {"mysql_engine": "InnoDB"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     channel_id = Column(Integer, nullable=False, index=True, comment="渠道ID")
@@ -257,6 +258,7 @@ class AlertIncidentModel(Base):
 class AlertLogModel(Base):
     """告警记录表 - 记录所有触发的告警事件"""
     __tablename__ = "alert_logs"
+    __table_args__ = {"mysql_engine": "InnoDB"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     node_name = Column(String(100), nullable=False, index=True, comment="节点名称")

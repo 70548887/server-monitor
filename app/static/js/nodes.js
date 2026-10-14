@@ -82,32 +82,38 @@ async function deleteNode(name) {
 }
 
 // ============= 编辑节点功能 =============
+let editNodeLoadController = null;
+function setEditNodeBusy(busy) {
+    document.querySelector('#editNodeForm button[type="submit"]').disabled = busy;
+}
 
 function showEditNodeModal(nodeName) {
     // 显示弹窗
     document.getElementById('editNodeModal').style.display = 'flex';
     document.getElementById('editNodeName').textContent = nodeName;
     document.getElementById('editOriginalName').value = nodeName;
+    document.getElementById('editName').value = nodeName;
+    setEditNodeBusy(true);
     
     // 加载节点数据
     loadNodeForEdit(nodeName);
 }
 
 function hideEditNodeModal() {
+    if (editNodeLoadController) editNodeLoadController.abort();
     document.getElementById('editNodeModal').style.display = 'none';
 }
 
 async function loadNodeForEdit(nodeName) {
+    if (editNodeLoadController) editNodeLoadController.abort();
+    const controller = new AbortController();
+    editNodeLoadController = controller;
     try {
-        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeName)}`);
-        if (!res.ok) {
-            alert('获取节点信息失败');
-            hideEditNodeModal();
-            return;
-        }
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeName)}`, {signal: controller.signal});
+        if (!res.ok) throw new Error('获取节点信息失败');
         const node = await res.json();
-        
-        // 填充表单
+        if (controller.signal.aborted || editNodeLoadController !== controller) return;
+        document.getElementById('editName').value = node.name || nodeName;
         document.getElementById('editUrl').value = node.url || '';
         document.getElementById('editRegion').value = node.region || 'default';
         document.getElementById('editTags').value = (node.tags || []).join(', ');
@@ -115,11 +121,11 @@ async function loadNodeForEdit(nodeName) {
         document.getElementById('editExpectStatus').value = node.expect?.status || 200;
         document.getElementById('editExpectBody').value = node.expect?.body_contains || '';
         document.getElementById('editEnabled').value = node.enabled ? 'true' : 'false';
-        
-        // 更新标签预览
         updateTagsPreview();
-    } catch (e) {
-        alert('加载节点信息失败: ' + e.message);
+        setEditNodeBusy(false);
+    } catch (error) {
+        if (error.name === 'AbortError') return;
+        alert('加载节点信息失败: ' + error.message);
         hideEditNodeModal();
     }
 }
@@ -151,6 +157,8 @@ if (editNodeForm) {
         e.preventDefault();
         const form = e.target;
         const nodeName = document.getElementById('editOriginalName').value;
+        const newName = document.getElementById('editName').value;
+        if (!newName.trim()) { alert('节点名称不能为空'); return; }
         
         // 解析标签
         const tagsInput = form.tags.value.trim();
@@ -168,6 +176,8 @@ if (editNodeForm) {
             }
         };
         
+        if (newName !== nodeName) data.name = newName;
+        setEditNodeBusy(true);
         try {
             const res = await fetch(`/api/nodes/${encodeURIComponent(nodeName)}`, {
                 method: 'PUT',
@@ -180,10 +190,12 @@ if (editNodeForm) {
                 location.reload();
             } else {
                 const err = await res.json();
-                alert('保存失败: ' + (err.detail?.message || err.detail || '未知错误'));
+                alert('保存失败: ' + (err.detail?.message || (Array.isArray(err.detail) ? err.detail.map(item => item.msg).join('；') : err.detail) || '未知错误'));
             }
         } catch (e) {
             alert('请求失败: ' + e.message);
+        } finally {
+            setEditNodeBusy(false);
         }
     };
 }

@@ -35,10 +35,10 @@
         }
         find('updateProxyClear').disabled = busy || proxySaving || !proxy.configured;
     }
-    async function saveProxy(clear = false) {
-        if (sending || proxySaving || (state && busyStates.has(state.state))) return;
+    async function saveProxy(clear = false, enableForUpdate = false) {
+        if (sending || proxySaving || (state && busyStates.has(state.state))) return false;
         const value = find('updateProxyUrl').value.trim();
-        const payload = {enabled: clear ? false : find('updateProxyEnabled').checked};
+        const payload = {enabled: clear ? false : enableForUpdate || find('updateProxyEnabled').checked};
         if (clear) payload.url = '';
         else if (value) payload.url = value;
         proxySaving = true;
@@ -57,9 +57,11 @@
             find('updateProxyUrl').value = '';
             setProxyVisibility(false);
             render(data);
-            proxyMessage(clear ? '代理已清除。' : data.proxy.enabled ? '代理已保存并启用，可以检查更新。' : '代理已关闭，已保存的地址仍保留。');
+            proxyMessage(clear ? '代理已清除，更新将使用直连。' : data.proxy.enabled ? '代理已保存并启用，可以检查更新。' : '代理已关闭；检查或下载时需先启用。');
+            return true;
         } catch (error) {
             proxyMessage(error.name === 'TimeoutError' ? '保存超时，请稍后重试。' : error.message || '代理保存失败，请稍后重试。', true);
+            return false;
         } finally {
             proxySaving = false;
             if (state) render(state);
@@ -85,6 +87,10 @@
         message(data.message + (data.state === 'complete' && initialVersion.value !== data.current_version ? '，刷新页面后使用新版本。' : ''), data.state === 'error');
         const busy = busyStates.has(data.state) || sending || proxySaving;
         renderProxy(data, busy);
+        const enableFirst = data.proxy?.configured && !data.proxy.enabled;
+        find('updateCheck').textContent = enableFirst ? '启用代理并检查' : '检查更新';
+        find('updateDownload').textContent = enableFirst ? '启用代理并下载' : '下载更新';
+        find('updateApply').textContent = enableFirst ? '启用代理并应用' : '应用更新';
         find('updateProgress').hidden = !busy;
         find('updateProgress').value = data.progress || 0;
         find('updateCapability').textContent = data.capability.reason;
@@ -148,6 +154,16 @@
     }
     async function act(action, body) {
         if (sending || proxySaving) return;
+        if (['check', 'download', 'apply'].includes(action)) {
+            if (proxyDirty) {
+                proxyMessage('代理设置尚未保存，请先保存代理，再进行更新。', true);
+                return;
+            }
+            if (state?.proxy?.configured && !state.proxy.enabled) {
+                // 按钮明确提示“启用代理并…”，先保存启用状态，再提交网络操作。
+                if (!await saveProxy(false, true)) return;
+            }
+        }
         sending = true;
         if (state) render(state);
         try {
