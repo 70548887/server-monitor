@@ -8,6 +8,13 @@
     let proxySaving = false;
     const proxyForm = find('updateProxyForm');
 
+    function setProxyVisibility(visible) {
+        find('updateProxyUrl').type = visible ? 'text' : 'password';
+        const button = find('updateProxyVisibility');
+        button.textContent = visible ? '隐藏' : '显示';
+        button.setAttribute('aria-pressed', String(visible));
+        button.setAttribute('aria-label', visible ? '隐藏代理地址' : '显示代理地址');
+    }
     function proxyMessage(text, error = false) {
         if (!proxyForm) return;
         find('updateProxyMessage').textContent = text;
@@ -23,7 +30,7 @@
         find('updateProxySummary').textContent = proxy.configured
             ? `${proxy.enabled ? '使用代理' : '已关闭，保留配置'}：${proxy.display_url}${proxy.has_auth ? '（已配置认证）' : ''}`
             : '未配置代理';
-        for (const id of ['updateProxyEnabled', 'updateProxyUrl', 'updateProxySave']) {
+        for (const id of ['updateProxyEnabled', 'updateProxyUrl', 'updateProxySave', 'updateProxyVisibility']) {
             find(id).disabled = busy || proxySaving;
         }
         find('updateProxyClear').disabled = busy || proxySaving || !proxy.configured;
@@ -48,6 +55,7 @@
             if (!data?.proxy) throw new Error('代理配置响应异常，请刷新后确认保存结果');
             proxyDirty = false;
             find('updateProxyUrl').value = '';
+            setProxyVisibility(false);
             render(data);
             proxyMessage(clear ? '代理已清除。' : data.proxy.enabled ? '代理已保存并启用，可以检查更新。' : '代理已关闭，已保存的地址仍保留。');
         } catch (error) {
@@ -160,6 +168,9 @@
         }
     }
     if (proxyForm) {
+        find('updateProxyVisibility').addEventListener('click', () => {
+            setProxyVisibility(find('updateProxyUrl').type === 'password');
+        });
         proxyForm.addEventListener('submit', event => { event.preventDefault(); saveProxy(); });
         for (const id of ['updateProxyEnabled', 'updateProxyUrl']) {
             find(id).addEventListener('input', () => { proxyDirty = true; proxyMessage('修改尚未保存'); });

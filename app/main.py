@@ -79,6 +79,7 @@ async def _init_database(config):
         from app.repositories.mysql_repository import get_mysql_repository
         
         # 初始化数据库并完成增量升级；此后才能启动仓库和调度器
+        schema_started = time.perf_counter()
         await init_db(
             host=config.database.mysql_host,
             port=config.database.mysql_port,
@@ -91,7 +92,7 @@ async def _init_database(config):
         )
         
         _db_available = True
-        logger.info("数据库初始化完成，表结构已检查并补齐")
+        logger.info("数据库初始化完成，表结构已检查并补齐，耗时=%.2f秒", time.perf_counter() - schema_started)
         
         # 获取仓库实例
         repo = get_mysql_repository()
@@ -126,6 +127,7 @@ async def _init_database(config):
         
         # 从数据库加载历史心跳记录到可用性服务
         logger.info("正在从数据库加载历史样本...")
+        history_started = time.perf_counter()
         samples = await repo.get_recent_samples(hours=24)  # 加载最近24小时的数据
         
         if samples:
@@ -143,7 +145,7 @@ async def _init_database(config):
                 for s in samples
             ]
             availability_service.add_records(records)
-            logger.info(f"已加载 {len(records)} 条历史样本")
+            logger.info("已加载 %s 条历史样本（查询及缓存合计 %.2f秒）", len(records), time.perf_counter() - history_started)
         else:
             logger.info("没有找到历史样本")
         
@@ -251,6 +253,7 @@ async def _init_default_notification_channels():
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # ========== 启动 ==========
+    startup_started = time.perf_counter()
     logger.info("正在启动服务器监控应用...")
     
     # 加载配置
@@ -354,8 +357,6 @@ async def lifespan(app: FastAPI):
     logger.info("正在初始化存储层健康检查...")
     await _init_storage_health_check(config)
     
-    logger.info(f"服务器监控 v{__version__} 启动成功")
-    
     # 输出数据库中的节点数量
     if _db_available:
         try:
@@ -381,6 +382,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"初始化通知渠道失败: {e}")
     
+    logger.info("服务器监控 v%s 启动成功，初始化总耗时=%.2f秒", __version__, time.perf_counter() - startup_started)
     yield
     
     # ========== 关闭 ==========
