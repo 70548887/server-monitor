@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% block title %}设置 - 服务器监控面板{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/settings.css?v=tabs-1">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/settings.css?v=proxy-1">{% endblock %}
 {% block content %}
 {% set account_name = admin.username if admin else username %}
 {% set active_tab = settings_tab|default('account') %}
@@ -53,6 +53,12 @@
         <div class="settings-section-heading"><h2>系统更新</h2><p>检查新版本，管理程序更新与备份。</p></div>
         <section class="settings-card" id="systemUpdate" aria-labelledby="updateTitle">
             <header class="settings-card-heading update-heading"><div><h3 id="updateTitle">版本与更新</h3><p>保持监控面板为最新可用版本。</p></div><span class="update-repo">GitHub / server-monitor</span></header>
+            <form id="updateProxyForm" class="update-proxy" aria-labelledby="updateProxyTitle">
+                <div class="update-proxy-heading"><div><h4 id="updateProxyTitle">更新网络代理</h4><p class="settings-form-hint">用于版本检查、更新包下载和更新依赖安装，保存后立即生效。</p></div><label class="update-proxy-switch"><input type="checkbox" id="updateProxyEnabled"><span>启用代理</span></label></div>
+                <div class="settings-form-field"><label for="updateProxyUrl">代理地址</label><input type="password" id="updateProxyUrl" name="update_proxy" autocomplete="new-password" spellcheck="false" maxlength="2048" placeholder="http://用户名:密码@主机:端口" aria-describedby="updateProxyHint"><p class="settings-form-hint" id="updateProxyHint">支持 HTTP / HTTPS 代理。留空保留已保存的地址；特殊字符需使用 URL 编码。</p></div>
+                <div class="update-proxy-footer"><p id="updateProxySummary" class="settings-form-hint">正在读取代理配置…</p><div class="update-proxy-actions"><button type="button" class="btn btn-secondary" id="updateProxyClear" disabled>清除代理</button><button type="submit" class="btn-save" id="updateProxySave">保存代理</button></div></div>
+                <p id="updateProxyMessage" class="settings-form-hint" role="status" aria-live="polite"></p>
+            </form>
             <div class="update-versions"><div><span class="label">当前版本</span><strong id="updateCurrent">正在读取…</strong><span class="version-caption">当前正在运行</span></div><div><span class="label">最新版本</span><strong id="updateLatest">尚未检查</strong><span class="version-caption">已发布的稳定版本</span></div></div>
             <div class="update-status-box"><p id="updateMessage" role="status" aria-live="polite">正在读取升级状态…</p><progress id="updateProgress" max="100" value="0" hidden aria-label="升级进度"></progress><p id="updateCapability" class="settings-form-hint"></p></div>
             <div class="update-actions"><button type="button" class="btn-save" id="updateCheck">检查更新</button><button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button><button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button><button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button></div>
@@ -62,4 +68,4 @@
     </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=1"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=proxy-1"></script>{% endblock %}

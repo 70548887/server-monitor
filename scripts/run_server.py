@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 import zipfile
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -97,10 +98,26 @@ if __name__ == "__main__":
         os.execv(restored_python, [restored_python, str(ROOT / "scripts/run_server.py"), *sys.argv[1:]])
 
 import httpx
+from app.services.update_network import load_update_proxy
 from app.services.update_runtime import (
     RuntimeStore, UpdateError, OperationLock, atomic_json, read_json, package_version,
     file_hashes, apply_files, validate_lock, quiet_process_options, UpdateBusy,
 )
+
+
+def redact_proxy_output(value, proxy_url):
+    """代理凭据只在子进程环境中使用，原文不得落入安装日志。"""
+    if not proxy_url:
+        return value
+    parsed = urlsplit(proxy_url)
+    secrets = {proxy_url, unquote(proxy_url)}
+    for credential in (parsed.username, parsed.password):
+        if credential:
+            secrets.update((credential, unquote(credential)))
+    for secret in sorted(secrets, key=len, reverse=True):
+        value = value.replace(secret, "***")
+    # pip/requests 可能重新格式化 URL；其他含认证信息的 URL 也不写入日志。
+    return re.sub(r"(?i)(https?://)[^\s/]*@", r"\1***@", value)
 
 
 class ServerManager:
@@ -180,17 +197,41 @@ class ServerManager:
                 time.sleep(.5)
         return False
 
-    def command(self, args, timeout, label, cwd=None):
-        """输出仅落本地日志；不向界面回显pip环境、数据库凭据或绝对路径。"""
-        with (self.store.home / "worker.log").open("ab") as log:
-            process = subprocess.Popen(args, cwd=cwd or self.root, stdout=log, stderr=log,
-                                       env={**self.environment(), "PIP_NO_INPUT":"1"}, **quiet_process_options())
-            try:
-                code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-                raise UpdateError(label + "超时")
+    def command(self, args, timeout, label, cwd=None, *, use_update_proxy=False):
+        """输出脱敏后落本地日志；升级代理仅进入 pip 的子进程环境。"""
+        env = {**self.environment(), "PIP_NO_INPUT":"1"}
+        proxy_url = ""
+        if use_update_proxy:
+            network = load_update_proxy(self.root)
+            proxy_url = network["url"]
+            # 清除大小写混用的继承值，避免 NO_PROXY 绕过本页选择的代理。
+            # 关闭时仅停用本页代理，用户自己的 pip 配置文件仍保持原有语义。
+            proxy_keys = {"http_proxy", "https_proxy", "all_proxy", "no_proxy", "pip_proxy"}
+            env = {key:value for key,value in env.items() if key.lower() not in proxy_keys}
+            if network["enabled"]:
+                for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+                    env[key] = env[key.lower()] = proxy_url
+                env["PIP_PROXY"] = proxy_url
+        # 先从管道读取并脱敏，再写日志；不能先把含密码的原始输出写到临时文件。
+        with (self.store.home / "worker.log").open("a", encoding="utf-8") as log:
+            process = subprocess.Popen(args, cwd=cwd or self.root, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                       env=env, **quiet_process_options())
+            def copy_output():
+                with process.stdout:
+                    for line in process.stdout:
+                        log.write(redact_proxy_output(line, proxy_url))
+                        log.flush()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                output = executor.submit(copy_output)
+                try:
+                    code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                    output.result()
+                    raise UpdateError(label + "超时") from None
+                output.result()
         if code:
             raise UpdateError(label + "失败，详见本机 .updates/worker.log")
 
@@ -203,7 +244,7 @@ class ServerManager:
         self.command([self.python, "-m", "venv", str(runtime)], 120, "创建升级运行环境")
         python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         self.command([str(python), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:",
-                      "-r", str(staged / "requirements.lock")], 900, "安装升级依赖")
+                      "-r", str(staged / "requirements.lock")], 900, "安装升级依赖", use_update_proxy=True)
         return str(python)
 
     def validate_code(self, staged, python):
