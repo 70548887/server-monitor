@@ -76,6 +76,19 @@
 .update-backups li { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); font-size:12px; overflow-wrap:anywhere; }
 .update-backups li > span { min-width:0; }
 .update-backups button { flex:none; }
+.update-proxy { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:24px; }
+.update-proxy-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:18px; }
+.update-proxy-heading h4 { font-size:14px; font-weight:600; }
+.update-proxy-switch { display:inline-flex; align-items:center; gap:8px; font-size:12px; white-space:nowrap; cursor:pointer; }
+.update-proxy-switch input { width:16px; height:16px; accent-color:var(--primary); }
+.update-proxy .settings-form-field { margin-bottom:12px; }
+.update-proxy-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.update-proxy-footer > p { min-width:0; flex:1 1 200px; }
+.update-proxy-actions { display:flex; flex-wrap:wrap; gap:8px; }
+#updateProxyMessage:empty { display:none; }
+#updateProxyMessage.is-error { color:var(--danger); }
+@media (max-width:680px) { .update-proxy { padding:16px; } .update-proxy-heading { align-items:flex-start; flex-direction:column; gap:12px; } }
+@media (max-width:380px) { .update-proxy-actions { width:100%; } .update-proxy-actions button { flex:1; } }
 @media (max-width:850px) { .settings-columns { grid-template-columns:minmax(0,1fr) 260px; gap:16px; } .settings-card { padding:22px; } }
 @media (max-width:680px) { .settings-columns { grid-template-columns:minmax(0,1fr); } .settings-header { margin-bottom:24px; } .settings-identity { display:none; } .settings-tabs { gap:0; } .settings-tab { flex:1; padding:14px 8px; gap:6px; font-size:13px; } .settings-tab svg { width:16px; } .settings-card { padding:20px; } .settings-header h1 { font-size:27px; } .settings-aside { display:grid; grid-template-columns:minmax(0,1fr); } .settings-account-summary .settings-facts { margin-top:18px; } .update-heading { flex-direction:column; } .update-versions { gap:10px; } .update-versions > div { padding:14px; } .update-versions strong { font-size:21px; } }
 @media (max-width:380px) { .settings-tab { font-size:12px; padding:12px 5px; } .settings-tab svg { display:none; } .settings-form-footer { align-items:stretch; flex-direction:column; } .settings-card { padding:16px; } .update-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; } .settings-page .btn,.settings-page .btn-save { padding:9px 10px; } }

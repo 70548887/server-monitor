@@ -1,5 +1,6 @@
 """管理员在线升级接口，写操作要求同源自定义请求头。"""
 from urllib.parse import urlsplit
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -37,8 +38,34 @@ def failure(exc):
 async def status():
     try:
         return get_update_service().status()
+    except UpdateError as exc:
+        raise failure(exc)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="升级目录不可读写或状态文件损坏，请检查服务用户权限") from exc
+
+
+@router.post("/proxy")
+async def save_proxy(request: Request, admin=Depends(admin_required)):
+    # 手工校验并返回固定错误，避免框架422响应回显带认证的原始代理地址。
+    try:
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise ValueError
+        data = json.loads(raw)
+        if not isinstance(data, dict) or set(data) - {"enabled", "url"}:
+            raise ValueError
+        if type(data.get("enabled")) is not bool:
+            raise ValueError
+        if data.get("url") is not None and not isinstance(data["url"], str):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="代理配置格式无效") from None
+    try:
+        return get_update_service().save_proxy(data["enabled"], data.get("url"), admin.get("username"))
+    except UpdateError as exc:
+        raise failure(exc)
+    except OSError:
+        raise HTTPException(status_code=503, detail="代理设置保存失败，请检查升级目录权限") from None
 
 
 @router.post("/check", status_code=202)

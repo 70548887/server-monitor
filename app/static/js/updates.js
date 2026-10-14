@@ -4,6 +4,60 @@
     const find = id => document.getElementById(id);
     const busyStates = new Set(['checking','downloading','backing_up','queued','preparing','applying','restarting','rolling_back']);
     let state = null;
+    let proxyDirty = false;
+    let proxySaving = false;
+    const proxyForm = find('updateProxyForm');
+
+    function proxyMessage(text, error = false) {
+        if (!proxyForm) return;
+        find('updateProxyMessage').textContent = text;
+        find('updateProxyMessage').classList.toggle('is-error', error);
+    }
+    function renderProxy(data, busy) {
+        if (!proxyForm) return;
+        const proxy = data.proxy || {enabled:false, configured:false, display_url:'', has_auth:false};
+        if (!proxyDirty) find('updateProxyEnabled').checked = proxy.enabled;
+        find('updateProxyUrl').placeholder = proxy.configured
+            ? '代理已保存；输入新地址可替换，留空保持不变'
+            : 'http://用户名:密码@主机:端口';
+        find('updateProxySummary').textContent = proxy.configured
+            ? `${proxy.enabled ? '使用代理' : '已关闭，保留配置'}：${proxy.display_url}${proxy.has_auth ? '（已配置认证）' : ''}`
+            : '未配置代理';
+        for (const id of ['updateProxyEnabled', 'updateProxyUrl', 'updateProxySave']) {
+            find(id).disabled = busy || proxySaving;
+        }
+        find('updateProxyClear').disabled = busy || proxySaving || !proxy.configured;
+    }
+    async function saveProxy(clear = false) {
+        if (sending || proxySaving || (state && busyStates.has(state.state))) return;
+        const value = find('updateProxyUrl').value.trim();
+        const payload = {enabled: clear ? false : find('updateProxyEnabled').checked};
+        if (clear) payload.url = '';
+        else if (value) payload.url = value;
+        proxySaving = true;
+        if (state) render(state);
+        else renderProxy({}, false);
+        proxyMessage('正在保存…');
+        try {
+            const response = await fetch('/api/system/update/proxy', {
+                method:'POST', headers:{'Content-Type':'application/json','X-Update-Request':'1'},
+                body:JSON.stringify(payload), signal:AbortSignal.timeout(15000),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : '代理配置保存失败，请检查输入后重试');
+            if (!data?.proxy) throw new Error('代理配置响应异常，请刷新后确认保存结果');
+            proxyDirty = false;
+            find('updateProxyUrl').value = '';
+            render(data);
+            proxyMessage(clear ? '代理已清除。' : data.proxy.enabled ? '代理已保存并启用，可以检查更新。' : '代理已关闭，已保存的地址仍保留。');
+        } catch (error) {
+            proxyMessage(error.name === 'TimeoutError' ? '保存超时，请稍后重试。' : error.message || '代理保存失败，请稍后重试。', true);
+        } finally {
+            proxySaving = false;
+            if (state) render(state);
+            else renderProxy({}, false);
+        }
+    }
     let timer = null;
     let sending = false;
     let retrying = false;
@@ -21,7 +75,8 @@
         find('updateCurrent').textContent = 'v' + data.current_version;
         find('updateLatest').textContent = data.release ? 'v' + data.release.version : '尚未检查';
         message(data.message + (data.state === 'complete' && initialVersion.value !== data.current_version ? '，刷新页面后使用新版本。' : ''), data.state === 'error');
-        const busy = busyStates.has(data.state) || sending;
+        const busy = busyStates.has(data.state) || sending || proxySaving;
+        renderProxy(data, busy);
         find('updateProgress').hidden = !busy;
         find('updateProgress').value = data.progress || 0;
         find('updateCapability').textContent = data.capability.reason;
@@ -84,7 +139,7 @@
         }
     }
     async function act(action, body) {
-        if (sending) return;
+        if (sending || proxySaving) return;
         sending = true;
         if (state) render(state);
         try {
@@ -103,6 +158,13 @@
             if (state) render(state);
             message(error.message || '操作未能提交，请检查状态后重试', true);
         }
+    }
+    if (proxyForm) {
+        proxyForm.addEventListener('submit', event => { event.preventDefault(); saveProxy(); });
+        for (const id of ['updateProxyEnabled', 'updateProxyUrl']) {
+            find(id).addEventListener('input', () => { proxyDirty = true; proxyMessage('修改尚未保存'); });
+        }
+        find('updateProxyClear').addEventListener('click', () => saveProxy(true));
     }
     find('updateCheck').addEventListener('click', () => act('check'));
     find('updateDownload').addEventListener('click', () => act('download'));
