@@ -82,7 +82,7 @@ def _create_ssl_context() -> ssl.SSLContext:
     
     return context
 
-from sqlalchemy import select, update, func, and_
+from sqlalchemy import select, update, func, and_, case
 from sqlalchemy.exc import SQLAlchemyError
 
 from ..models.notification_channel import (
@@ -545,7 +545,9 @@ class NotificationLogService:
                 await session.flush()
                 await session.refresh(log)
                 
-                if success:
+                if log.delivery_status == "skipped":
+                    logger.debug("Notification skipped by send rules: channel=%s, node=%s, reason=%s", channel_name, node_name, log.skip_reason)
+                elif success:
                     logger.debug(
                         f"Notification log added: channel={channel_name}, "
                         f"alert_type={alert_type}, node={node_name}"
@@ -580,6 +582,7 @@ class NotificationLogService:
         end_date: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
+        status: Optional[str] = None,
     ) -> tuple[List[dict], int]:
         """
         获取发送记录列表
@@ -587,6 +590,8 @@ class NotificationLogService:
         Returns:
             (logs, total_count)
         """
+        if status is not None and status not in {"success", "failed", "skipped"}:
+            raise ValueError("无效的通知发送状态")
         try:
             async with get_session_context() as session:
                 # 构建查询
@@ -600,8 +605,11 @@ class NotificationLogService:
                     conditions.append(NotificationLogModel.node_name == node_name)
                 if alert_type:
                     conditions.append(NotificationLogModel.alert_type == alert_type)
-                if success is not None:
-                    conditions.append(NotificationLogModel.success == success)
+                if status is not None:
+                    conditions.append(NotificationLogModel.delivery_status_condition(status))
+                elif success is not None:
+                    # 兼容旧客户端，success=false 指实际失败，不再包括规则跳过。
+                    conditions.append(NotificationLogModel.delivery_status_condition("success" if success else "failed"))
                 if start_date:
                     conditions.append(NotificationLogModel.sent_at >= start_date)
                 if end_date:
@@ -626,6 +634,25 @@ class NotificationLogService:
             return [], 0
 
     @staticmethod
+    async def get_today_stats() -> dict:
+        """数据库聚合全部今日记录，规则跳过不进入发送总量和失败数。"""
+        try:
+            async with get_session_context() as session:
+                start = datetime.combine(datetime.today(), time.min)
+                end = start + timedelta(days=1)
+                columns = [func.coalesce(func.sum(case(
+                    (NotificationLogModel.delivery_status_condition(status), 1), else_=0,
+                )), 0).label(status) for status in ("success", "failed", "skipped")]
+                row = (await session.execute(select(*columns).where(
+                    NotificationLogModel.sent_at >= start, NotificationLogModel.sent_at < end,
+                ))).mappings().one()
+                values = {status: int(row[status]) for status in ("success", "failed", "skipped")}
+                return {"total": values["success"] + values["failed"], **values}
+        except Exception:
+            logger.exception("Failed to aggregate notification log statistics")
+            raise
+
+    @staticmethod
     async def delete_log(log_id: int) -> bool:
         """删除单条发送记录，同步更新渠道统计"""
         try:
@@ -638,7 +665,8 @@ class NotificationLogService:
                 
                 # 保存记录信息用于更新统计
                 channel_id = log.channel_id
-                was_failed = not log.success
+                was_attempted = log.delivery_status != "skipped"
+                was_failed = log.delivery_status == "failed"
                 
                 await session.delete(log)
                 await session.flush()
@@ -648,7 +676,7 @@ class NotificationLogService:
                 channel_result = await session.execute(channel_stmt)
                 channel = channel_result.scalar_one_or_none()
                 if channel:
-                    if channel.send_count > 0:
+                    if was_attempted and channel.send_count > 0:
                         channel.send_count -= 1
                     if was_failed and channel.error_count > 0:
                         channel.error_count -= 1
@@ -673,8 +701,9 @@ class NotificationLogService:
                 for log in logs:
                     if log.channel_id not in channel_changes:
                         channel_changes[log.channel_id] = {"total": 0, "failed": 0}
-                    channel_changes[log.channel_id]["total"] += 1
-                    if not log.success:
+                    if log.delivery_status != "skipped":
+                        channel_changes[log.channel_id]["total"] += 1
+                    if log.delivery_status == "failed":
                         channel_changes[log.channel_id]["failed"] += 1
                 
                 # 执行删除
@@ -729,7 +758,8 @@ class NotificationLogService:
         try:
             async with get_session_context() as session:
                 stmt = select(NotificationLogModel.sent_at).where(
-                    NotificationLogModel.channel_id == channel_id
+                    NotificationLogModel.channel_id == channel_id,
+                    ~NotificationLogModel.rule_skipped_condition(),
                 )
                 if node_name:
                     stmt = stmt.where(NotificationLogModel.node_name == node_name)
@@ -781,14 +811,17 @@ class NotificationLogService:
                 result = {}
                 for channel in channels:
                     # 统计该渠道的发送记录
-                    total_stmt = select(func.count()).where(NotificationLogModel.channel_id == channel.id)
+                    total_stmt = select(func.count()).where(
+                        NotificationLogModel.channel_id == channel.id,
+                        ~NotificationLogModel.rule_skipped_condition(),
+                    )
                     total_result = await session.execute(total_stmt)
                     actual_total = total_result.scalar() or 0
                     
                     failed_stmt = select(func.count()).where(
                         and_(
                             NotificationLogModel.channel_id == channel.id,
-                            NotificationLogModel.success == False
+                            NotificationLogModel.delivery_status_condition("failed")
                         )
                     )
                     failed_result = await session.execute(failed_stmt)
@@ -1178,7 +1211,7 @@ class NotificationService:
                 channel, node_name, skip_daily_limit=escalated
             )
             if not can_send:
-                # 记录被限制的发送
+                # 规则正常拦截：保留原因用于审查，但派生为 skipped，不计作发送失败。
                 await NotificationLogService.add_log(
                     channel_id=channel_id,
                     channel_name=channel.get("name", ""),
