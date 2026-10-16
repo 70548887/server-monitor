@@ -11,7 +11,7 @@ async function recalculateStats() {
             let msg = data.message + '\n\n';
             for (const [id, ch] of Object.entries(data.channels)) {
                 if (ch.changed) {
-                    msg += `${escapeHtml(ch.name)}: ${ch.old.send_count}→${ch.new.send_count} 次, 失败 ${ch.old.error_count}→${ch.new.error_count}\n`;
+                    msg += `${ch.channel_name}: ${ch.old_total}→${ch.new_total} 次, 失败 ${ch.old_failed}→${ch.new_failed}\n`;
                 }
             }
             alert(msg);
@@ -450,10 +450,12 @@ async function loadLogsStats() {
         const todayTotal = document.getElementById('today-total');
         const todaySuccess = document.getElementById('today-success');
         const todayFailed = document.getElementById('today-failed');
+        const todaySkipped = document.getElementById('today-skipped');
         
         if (todayTotal) todayTotal.textContent = data.today.total;
         if (todaySuccess) todaySuccess.textContent = data.today.success;
         if (todayFailed) todayFailed.textContent = data.today.failed;
+        if (todaySkipped) todaySkipped.textContent = data.today.skipped || 0;
     } catch (e) {
         console.error('Failed to load logs stats:', e);
     }
@@ -474,17 +476,24 @@ async function loadChannelsForFilter() {
     }
 }
 
+// 兼容旧记录：发送规则拦截属于正常跳过，不代表通知发送失败。
+function getNotificationLogStatus(log) {
+    if (['success', 'failed', 'skipped'].includes(log.status)) return log.status;
+    if (!log.success && /^发送被限制[:：]/.test(log.error_message || '')) return 'skipped';
+    return log.success ? 'success' : 'failed';
+}
+
 async function loadLogs(offset = 0) {
     logsOffset = Math.max(0, offset);
     
     const channelId = document.getElementById('log-filter-channel')?.value || '';
     const alertType = document.getElementById('log-filter-type')?.value || '';
-    const success = document.getElementById('log-filter-status')?.value || '';
+    const status = document.getElementById('log-filter-status')?.value || '';
     
     let url = `/api/notifications/logs?limit=50&offset=${logsOffset}`;
     if (channelId) url += `&channel_id=${channelId}`;
     if (alertType) url += `&alert_type=${alertType}`;
-    if (success) url += `&success=${success}`;
+    if (status) url += `&status=${encodeURIComponent(status)}`;
     
     try {
         const res = await fetch(url);
@@ -511,7 +520,9 @@ async function loadLogs(offset = 0) {
                 'manual': '手动发送'
             };
             
-            tbody.innerHTML = data.logs.map(log => `
+            tbody.innerHTML = data.logs.map(log => {
+                const status = getNotificationLogStatus(log);
+                return `
                 <tr>
                     <td><input type="checkbox" class="log-checkbox" value="${log.id}" onchange="updateLogsSelectedCount()"></td>
                     <td>${formatTime(log.sent_at)}</td>
@@ -525,17 +536,21 @@ async function loadLogs(offset = 0) {
                     <td class="url-cell" title="${escapeHtml(log.subject || '')}">${escapeHtml((log.subject || '-').substring(0, 30))}</td>
                     <td class="url-cell" title="${escapeHtml(log.recipients || '')}">${escapeHtml(log.recipients || '-')}</td>
                     <td>
-                        <span class="badge badge-${log.success ? 'success' : 'danger'}">
-                            ${log.success ? '成功' : '失败'}
+                        <span class="badge badge-${status === 'success' ? 'success' : status === 'skipped' ? 'secondary' : 'danger'}">
+                            ${status === 'success' ? '成功' : status === 'skipped' ? '规则跳过' : '失败'}
                         </span>
-                        ${!log.success && log.error_message ? `<small style="color:red;" title="${escapeHtml(log.error_message)}">🛑</small>` : ''}
+                        ${status === 'skipped'
+                            ? `<small style="color:#6c757d;" title="${escapeHtml(log.skip_reason || log.error_message || '按发送规则跳过，不计入发送失败')}">ⓘ</small>`
+                            : status === 'failed' && log.error_message
+                                ? `<small style="color:red;" title="${escapeHtml(log.error_message)}">🛑</small>` : ''}
                     </td>
                     <td>${log.send_duration_ms ? log.send_duration_ms.toFixed(0) + 'ms' : '-'}</td>
                     <td>
                         <button class="btn btn-sm btn-danger" onclick="deleteLog(${log.id})" title="删除">×</button>
                     </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
         
         // 更新分页信息

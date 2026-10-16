@@ -1,8 +1,11 @@
 """已发布数据库增量升级；启动和手工引导共用，不改写业务记录。"""
 
+import asyncio
 import hashlib
 import logging
-from contextlib import asynccontextmanager
+import math
+import os
+from contextlib import asynccontextmanager, suppress
 from time import perf_counter
 from typing import Callable, Optional
 
@@ -21,20 +24,68 @@ class SchemaMigrationError(RuntimeError):
     """结构未就绪时禁止启动调度器或开放业务接口。"""
 
 
+# 每轮 GET_LOCK 最多等 30 秒，允许旧库大表升级完成后复用结果。
+SCHEMA_LOCK_WAIT_SECONDS = 1800
+SCHEMA_LOCK_WAIT_MAX_SECONDS = 86400
+SCHEMA_PROGRESS_INTERVAL_SECONDS = 30
+
+
+def _schema_lock_wait_seconds() -> int:
+    raw = os.environ.get("MONITOR_SCHEMA_LOCK_WAIT_SECONDS")
+    if raw is None:
+        return SCHEMA_LOCK_WAIT_SECONDS
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        raise SchemaMigrationError(
+            "MONITOR_SCHEMA_LOCK_WAIT_SECONDS 必须是 1 到 86400 的整数秒"
+        ) from None
+    if not 1 <= seconds <= SCHEMA_LOCK_WAIT_MAX_SECONDS:
+        raise SchemaMigrationError(
+            "MONITOR_SCHEMA_LOCK_WAIT_SECONDS 必须是 1 到 86400 的整数秒"
+        )
+    return seconds
+
+
 @asynccontextmanager
-async def schema_lock(conn):
-    """MySQL DDL 会隐式提交，用连接级命名锁串行化多个 worker 的升级。"""
+async def schema_lock(conn, report: Optional[Callable[[str], None]] = None):
+    """分段等待连接级命名锁，多个启动实例共享同一份升级结果。"""
+    report = report or logger.info
+    wait_seconds = _schema_lock_wait_seconds()
     database = (await conn.execute(text("SELECT DATABASE()"))).scalar()
     if not database:
         raise SchemaMigrationError("未选择数据库，无法检查表结构")
     # MySQL 命名锁上限 64 字节；按库隔离，所有升级入口使用相同名字。
     lock_name = "server_monitor_schema_" + hashlib.sha256(database.encode()).hexdigest()[:40]
-    acquired = (await conn.execute(
-        text("SELECT GET_LOCK(:name, :timeout)"),
-        {"name": lock_name, "timeout": 30},
-    )).scalar()
-    if acquired != 1:
-        raise SchemaMigrationError("等待数据库结构升级锁超时或失败，请稍后重启")
+    started = perf_counter()
+    try:
+        while True:
+            remaining = wait_seconds - (perf_counter() - started)
+            if remaining <= 0:
+                raise SchemaMigrationError(
+                    f"等待数据库结构升级锁超过 {wait_seconds} 秒，另一实例可能仍在迁移；"
+                    "请等待原实例完成并检查启动日志，不要反复重启"
+                )
+            acquired = (await conn.execute(
+                text("SELECT GET_LOCK(:name, :timeout)"),
+                {"name": lock_name,
+                 "timeout": min(SCHEMA_PROGRESS_INTERVAL_SECONDS, math.ceil(remaining))},
+            )).scalar()
+            if acquired == 1:
+                break
+            if acquired != 0:
+                raise SchemaMigrationError(
+                    "获取数据库结构升级锁失败，MySQL GET_LOCK 返回 NULL；请检查数据库日志"
+                )
+            report(
+                f"另一实例仍占用数据库结构升级锁，已等待 {perf_counter() - started:.0f} 秒"
+                f"（最多等待 {wait_seconds} 秒）；请等待迁移完成，不要反复重启"
+            )
+    except BaseException:
+        # 获取期间断线或取消时，MySQL 可能已拿到锁但响应尚未读取。
+        # 关闭物理连接，避免把可能持锁的连接交还连接池。
+        await conn.invalidate()
+        raise
     try:
         yield
     finally:
@@ -48,6 +99,25 @@ async def schema_lock(conn):
             # 不把仍可能持有命名锁的连接放回连接池。
             await conn.invalidate()
             raise
+
+
+async def _convert_table_engine(conn, table: str, report: Callable[[str], None]) -> None:
+    """等待 ALTER 完成；周期日志不为 DDL 设置额外超时。"""
+    started = perf_counter()
+
+    async def report_wait():
+        while True:
+            await asyncio.sleep(SCHEMA_PROGRESS_INTERVAL_SECONDS)
+            report(f"{table} 仍在转换为 InnoDB，已等待 {perf_counter() - started:.0f} 秒")
+
+    ticker = asyncio.create_task(report_wait())
+    try:
+        # 表名来自 NODE_TRANSACTION_TABLES 固定列表，不接受用户输入。
+        await conn.execute(text(f"ALTER TABLE {table} ENGINE=InnoDB"))
+    finally:
+        ticker.cancel()
+        with suppress(asyncio.CancelledError):
+            await ticker
 
 
 async def column_exists(conn, table: str, column: str) -> bool:
@@ -116,7 +186,7 @@ async def _ensure_node_transaction_engines(conn, report: Callable[[str], None]) 
         started = perf_counter()
         report(f"正在将 {table} 从 {engine_name} 转为 InnoDB，数据较多时需要等待")
         # 表名仅来自上面的固定列表，不接受用户输入。
-        await conn.execute(text(f"ALTER TABLE {table} ENGINE=InnoDB"))
+        await _convert_table_engine(conn, table, report)
         report(f"{table} 已转为 InnoDB，耗时 {perf_counter() - started:.2f} 秒")
         converted += 1
     return converted
@@ -140,7 +210,7 @@ async def ensure_schema(
     # 连接失败保留原异常，应用可按既有策略降级；连接成功后的结构错误必须阻断启动。
     async with engine.connect() as conn:
         try:
-            async with schema_lock(conn):
+            async with schema_lock(conn, report=report):
                 if create_tables:
                     await conn.run_sync(Base.metadata.create_all)
                 added = await _upgrade_incident_schema(conn, report)
