@@ -170,7 +170,19 @@ class ServerManager:
             self.child.kill()
             self.child.wait(timeout=10)
 
-    def healthy(self, expected, timeout=90):
+    def _waiting_timeout(self, variable, default, minimum):
+        value = self.environment().get(variable, str(default))
+        try:
+            seconds = int(value)
+            if not minimum <= seconds <= 86400:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise UpdateError(f"{variable} 必须为 {minimum} 到 86400 之间的整数秒数") from None
+        return seconds
+
+    def healthy(self, expected, timeout=None):
+        if timeout is None:
+            timeout = self._waiting_timeout("MONITOR_UPDATE_HEALTH_TIMEOUT_SECONDS", 1800, 30)
         host = "::1" if ":" in self.host else "127.0.0.1"
         if self.host not in ("0.0.0.0", "::", "127.0.0.1", "localhost"):
             host = self.host
@@ -256,7 +268,9 @@ class ServerManager:
         script = staged / "scripts/bootstrap_database.py"
         if not script.is_file():
             raise UpdateError("升级包缺少数据库引导脚本")
-        self.command([python, str(script)], 600, "检查数据库结构")
+        # 首次旧库大表转换与升级锁等待均可能超过原来的十分钟。
+        timeout = self._waiting_timeout("MONITOR_UPDATE_MIGRATION_TIMEOUT_SECONDS", 3600, 60)
+        self.command([python, str(script)], timeout, "检查数据库结构")
 
     def recover_transaction(self):
         transaction = read_json(self.store.home / "transaction.json")

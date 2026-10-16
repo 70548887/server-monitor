@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, time
-from typing import List, Optional
+from typing import List, Optional, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -257,6 +257,8 @@ class NotificationLogResponse(BaseModel):
     message: Optional[str]
     recipients: Optional[str]
     success: bool
+    status: Literal["success", "failed", "skipped"]
+    skip_reason: Optional[str] = None
     error_message: Optional[str]
     send_duration_ms: Optional[float]
     sent_at: Optional[str]
@@ -275,7 +277,8 @@ async def list_logs(
     channel_id: Optional[int] = Query(None, description="渠道ID过滤"),
     node_name: Optional[str] = Query(None, description="节点名称过滤"),
     alert_type: Optional[str] = Query(None, description="告警类型过滤"),
-    success: Optional[bool] = Query(None, description="成功状态过滤"),
+    success: Optional[bool] = Query(None, description="兼容成功状态过滤，失败不包含规则跳过"),
+    status: Optional[Literal["success", "failed", "skipped"]] = Query(None, description="发送状态过滤"),
     limit: int = Query(50, ge=1, le=500, description="每页数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
 ):
@@ -287,6 +290,7 @@ async def list_logs(
         node_name=node_name,
         alert_type=alert_type,
         success=success,
+        status=status,
         limit=limit,
         offset=offset,
     )
@@ -303,25 +307,17 @@ async def get_logs_stats():
     """
     获取发送记录统计
     """
-    # 今日记录
-    today_start = datetime.combine(datetime.today(), time.min)
-    today_logs, today_total = await NotificationLogService.get_logs(
-        start_date=today_start,
-        limit=1000,
-    )
-    
-    today_success = sum(1 for log in today_logs if log.get("success"))
-    today_failed = today_total - today_success
+    # 全量聚合真实尝试和规则跳过，不能把超过分页上限的记录都推算为失败。
+    try:
+        today = await NotificationLogService.get_today_stats()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="通知统计暂时不可用，请稍后重试") from exc
     
     # 最近的记录
     recent_logs, _ = await NotificationLogService.get_logs(limit=10)
     
     return {
-        "today": {
-            "total": today_total,
-            "success": today_success,
-            "failed": today_failed,
-        },
+        "today": today,
         "recent_logs": recent_logs,
     }
 

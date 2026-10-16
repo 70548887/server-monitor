@@ -170,6 +170,13 @@ async function loadIncidents(offset = 0) {
     }
 }
 
+/** 规则拦截是正常跳过；兼容升级前按错误消息保存的旧记录。 */
+function getNotificationLogStatus(log) {
+    if (['success', 'failed', 'skipped'].includes(log.status)) return log.status;
+    if (!log.success && /^发送被限制[:：]/.test(log.error_message || '')) return 'skipped';
+    return log.success ? 'success' : 'failed';
+}
+
 /** 展开/收起某个事件的提醒历史 */
 async function toggleIncidentDetail(incidentId) {
     const row = document.getElementById(`inc-detail-${incidentId}`);
@@ -215,28 +222,32 @@ async function toggleIncidentDetail(incidentId) {
         }
 
         const rows = logs.map(log => {
-            const ok = log.success;
+            const status = getNotificationLogStatus(log);
+            const explanation = status === 'skipped' ? (log.skip_reason || log.error_message || '按发送规则跳过') : log.error_message;
             return `
             <tr style="background:#fff;">
                 <td style="padding:4px 8px;">${formatTime(log.sent_at)}</td>
                 <td style="padding:4px 8px;">第 ${log.notify_seq ?? '-'} 次</td>
                 <td style="padding:4px 8px;">${escapeHtml(log.channel_name)}</td>
                 <td style="padding:4px 8px;">
-                    <span class="badge ${ok ? 'badge-success' : 'badge-secondary'}">
-                        ${ok ? '已送达' : '未送达'}
+                    <span class="badge ${status === 'success' ? 'badge-success' : status === 'skipped' ? 'badge-secondary' : 'badge-danger'}">
+                        ${status === 'success' ? '已送达' : status === 'skipped' ? '规则跳过' : '发送失败'}
                     </span>
                 </td>
                 <td style="padding:4px 8px;color:#666;">${escapeHtml((log.subject || '').substring(0, 60))}</td>
-                ${log.error_message ? `<td style="padding:4px 8px;color:#dc3545;font-size:12px;">${escapeHtml(log.error_message.substring(0, 50))}</td>` : '<td></td>'}
+                ${explanation ? `<td title="${escapeHtml(explanation)}" style="padding:4px 8px;color:${status === 'skipped' ? '#6c757d' : '#dc3545'};font-size:12px;">${escapeHtml(explanation.substring(0, 50))}</td>` : '<td></td>'}
             </tr>`;
         }).join('');
 
+        const deliveredCount = logs.filter(log => getNotificationLogStatus(log) === 'success').length;
+        const failedCount = logs.filter(log => getNotificationLogStatus(log) === 'failed').length;
+        const skippedCount = logs.filter(log => getNotificationLogStatus(log) === 'skipped').length;
         body.innerHTML = `
             <div style="font-size:13px;color:#666;margin-bottom:8px;">
-                该故障共提醒 <strong>${data.count}</strong> 次（提醒节奏自动递减，避免刷屏）
+                通知记录：已送达 <strong>${deliveredCount}</strong> 条，发送失败 <strong>${failedCount}</strong> 条，规则跳过 <strong>${skippedCount}</strong> 条（规则跳过不计入发送失败）
             </div>
             <table class="table" style="font-size:13px;">
-                <thead><tr><th>时间</th><th>第几次</th><th>渠道</th><th>结果</th><th>主题</th><th>错误</th></tr></thead>
+                <thead><tr><th>时间</th><th>第几次</th><th>渠道</th><th>结果</th><th>主题</th><th>说明</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>`;
     } catch (e) {

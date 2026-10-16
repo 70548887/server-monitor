@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
-from app.models import base
+from app.models import base, schema
 from app.models.schema import NODE_TRANSACTION_TABLES, SchemaMigrationError, ensure_schema
 
 
@@ -106,7 +106,8 @@ class SchemaConnection:
 
 
 @pytest.fixture
-def schema_store():
+def schema_store(monkeypatch):
+    monkeypatch.delenv("MONITOR_SCHEMA_LOCK_WAIT_SECONDS", raising=False)
     conn = SchemaConnection()
     try:
         yield conn
@@ -153,7 +154,10 @@ async def test_engine_conversion_and_missing_index_are_repaired(schema_store):
 
 
 @pytest.mark.parametrize("lock_result", [0, None])
-async def test_lock_failure_performs_no_ddl(schema_store, lock_result):
+async def test_lock_failure_performs_no_ddl(schema_store, lock_result, monkeypatch):
+    monkeypatch.setenv("MONITOR_SCHEMA_LOCK_WAIT_SECONDS", "30")
+    elapsed = iter([0, 0, 30, 30])
+    monkeypatch.setattr(schema, "perf_counter", lambda: next(elapsed))
     conn = schema_store
     conn.lock_result = lock_result
     with pytest.raises(SchemaMigrationError, match="升级锁"):

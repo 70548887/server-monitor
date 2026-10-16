@@ -1,7 +1,7 @@
 """通知渠道和发送记录 ORM 模型"""
 
 from datetime import datetime, time
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, Time, Float
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, Time, Float, and_, or_
 from sqlalchemy.sql import func
 import enum
 
@@ -158,6 +158,43 @@ class NotificationLogModel(Base):
     def __repr__(self):
         return f"<NotificationLogModel(channel={self.channel_name}, node={self.node_name}, success={self.success})>"
 
+    # 旧记录已用固定前缀保存规则原因；派生状态兼容旧表，不需要迁移或删除历史。
+    RULE_SKIP_PREFIXES = ("发送被限制:", "发送被限制：")
+
+    @property
+    def delivery_status(self) -> str:
+        if self.success:
+            return "success"
+        if any((self.error_message or "").startswith(prefix) for prefix in self.RULE_SKIP_PREFIXES):
+            return "skipped"
+        return "failed"
+
+    @property
+    def skip_reason(self) -> str | None:
+        if self.delivery_status != "skipped":
+            return None
+        for prefix in self.RULE_SKIP_PREFIXES:
+            if self.error_message.startswith(prefix):
+                return self.error_message[len(prefix):].strip()
+        return None
+
+    @classmethod
+    def rule_skipped_condition(cls):
+        # COALESCE 保证没有 error_message 的实际失败也能正确计入失败。
+        return and_(cls.success.is_not(True), or_(
+            *(func.coalesce(cls.error_message, "").startswith(prefix) for prefix in cls.RULE_SKIP_PREFIXES)
+        ))
+
+    @classmethod
+    def delivery_status_condition(cls, status: str):
+        if status == "success":
+            return cls.success.is_(True)
+        if status == "skipped":
+            return cls.rule_skipped_condition()
+        if status == "failed":
+            return and_(cls.success.is_not(True), ~cls.rule_skipped_condition())
+        raise ValueError("无效的通知发送状态")
+
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
@@ -172,8 +209,10 @@ class NotificationLogModel(Base):
             "subject": self.subject,
             "message": self.message[:200] + "..." if self.message and len(self.message) > 200 else self.message,
             "recipients": self.recipients,
-            "success": self.success,
-            "error_message": self.error_message,
+            "success": bool(self.success),
+            "status": self.delivery_status,
+            "skip_reason": self.skip_reason,
+            "error_message": None if self.delivery_status == "skipped" else self.error_message,
             "send_duration_ms": self.send_duration_ms,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
         }
