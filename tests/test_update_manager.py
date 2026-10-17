@@ -57,6 +57,7 @@ def test_bad_new_health_restores_old_program_and_runtime(manager,monkeypatch):
     assert mgr.python==old_python
     assert mgr.store.read()["rolled_back"] is True
     assert mgr.store.read()["state"]=="error"
+    assert mgr.store.read()["failed_state"] == "restarting"
     assert calls.count("start")==2
 
 
@@ -80,6 +81,7 @@ def test_preflight_failure_leaves_running_process_untouched(manager,monkeypatch)
     assert calls==[]
     assert package_version(mgr.root)=="1.0.0"
     assert mgr.store.read()["state"]=="error"
+    assert mgr.store.read()["failed_state"] == "preparing"
 
 
 def test_tampered_staging_rejected_before_service_stop(manager):
