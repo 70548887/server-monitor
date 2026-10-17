@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% block title %}设置 - 服务器监控面板{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/settings.css?v=visibility-1">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/settings.css?v=pipeline-1">{% endblock %}
 {% block content %}
 {% set account_name = admin.username if admin else username %}
 {% set active_tab = settings_tab|default('account') %}
@@ -60,12 +60,29 @@
                 <p id="updateProxyMessage" class="settings-form-hint" role="status" aria-live="polite"></p>
             </form>
             <div class="update-versions"><div><span class="label">当前版本</span><strong id="updateCurrent">正在读取…</strong><span class="version-caption">当前正在运行</span></div><div><span class="label">最新版本</span><strong id="updateLatest">尚未检查</strong><span class="version-caption">已发布的稳定版本</span></div></div>
+            <div class="update-flow-heading"><div><h4>连续升级</h4><p class="settings-form-hint">一次确认，自动检查、下载校验、备份应用和重启，失败时停止并保留结果。</p></div><button type="button" class="btn-save" id="updateUpgrade" disabled>一键更新</button></div>
+            <ol id="updateSteps" class="update-steps" aria-label="升级步骤">
+                <li data-step="check" data-state="pending"><span aria-hidden="true">1</span>检查版本</li>
+                <li data-step="download" data-state="pending"><span aria-hidden="true">2</span>下载校验</li>
+                <li data-step="apply" data-state="pending"><span aria-hidden="true">3</span>备份并应用</li>
+                <li data-step="restart" data-state="pending"><span aria-hidden="true">4</span>重启验证</li>
+                <li data-step="complete" data-state="pending"><span aria-hidden="true">5</span>完成</li>
+            </ol>
+            <section id="updateSetup" class="update-setup" aria-labelledby="updateSetupTitle" hidden>
+                <h4 id="updateSetupTitle">尚未启用在线应用</h4>
+                <p id="updateSetupExplanation">当前启动方式只支持检查和下载，校验完成后还需要升级管理器接管服务。</p>
+                <ol><li>在宝塔停止当前 Python 项目。</li><li>将启动命令改为下面的命令，工作目录保持为项目目录，端口按原配置调整。</li><li>重新启动项目并刷新此页，之后可以一键完成升级。</li></ol>
+                <div class="update-setup-path"><span>工作目录</span><code id="updateSetupDirectory"></code></div>
+                <div class="update-setup-command"><code id="updateSetupCommand"></code><button type="button" class="btn btn-secondary" id="updateSetupCopy">复制命令</button></div>
+                <p id="updateSetupCopyMessage" class="settings-form-hint" role="status" aria-live="polite"></p>
+            </section>
             <div class="update-status-box"><p id="updateMessage" role="status" aria-live="polite">正在读取升级状态…</p><progress id="updateProgress" max="100" value="0" hidden aria-label="升级进度"></progress><p id="updateCapability" class="settings-form-hint"></p></div>
-            <div class="update-actions"><button type="button" class="btn-save" id="updateCheck">检查更新</button><button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button><button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button><button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button></div>
+            <details class="update-manual-actions" open><summary>分步操作</summary><p class="settings-form-hint">需要单独检查、下载或重启时，可使用以下操作。</p>
+            <div class="update-actions"><button type="button" class="btn-save" id="updateCheck">检查更新</button><button type="button" class="btn btn-primary" id="updateDownload" disabled>下载更新</button><button type="button" class="btn btn-success" id="updateApply" disabled>应用更新</button><button type="button" class="btn btn-secondary" id="updateRestart" disabled>重启服务</button></div></details>
             <details id="updateRelease" hidden><summary>查看更新说明</summary><pre id="updateNotes"></pre><a id="updateReleaseLink" target="_blank" rel="noopener noreferrer">在 GitHub 查看版本 ↗</a></details>
             <div class="update-backup-section"><div class="update-backup-header"><div><h3>程序备份</h3><p class="settings-form-hint">应用更新前自动备份，也可以手动创建。</p></div><button type="button" class="btn btn-secondary" id="updateBackup">创建备份</button></div><ul id="updateBackups" class="update-backups"><li>正在读取备份…</li></ul><p class="settings-form-hint">备份包含程序和依赖环境信息，不包含数据库、账号密码和自定义配置；回滚不会恢复数据库结构。</p></div>
         </section>
     </section>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=proxy-required-1"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/settings.js?v=tabs-1"></script><script src="/static/js/updates.js?v=pipeline-1"></script>{% endblock %}

@@ -369,6 +369,7 @@ class ServerManager:
             (self.store.home / "staged.json").unlink(missing_ok=True)
             self.store.status("complete", "升级完成，服务健康" if action == "apply" else "程序已回滚，服务健康", 100, staged=None, rolled_back=False)
         except Exception as exc:
+            failed_state = self.store.read().get("state")
             message = str(exc) if isinstance(exc, UpdateError) else f"升级处理失败（{type(exc).__name__}）"
             restored = False
             if transaction:
@@ -390,7 +391,7 @@ class ServerManager:
                 self.python = old_python
                 self.start_child()
             self.store.status("error", message + ("；已自动恢复升级前程序与依赖" if restored else ""), 100,
-                              error=message, rolled_back=restored)
+                              error=message, rolled_back=restored, failed_state=failed_state)
         finally:
             with (self.store.home / "history.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"time":time.time(), "action":request.get("action"), "actor":request.get("actor"),
