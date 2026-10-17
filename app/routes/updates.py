@@ -84,6 +84,14 @@ async def download(admin=Depends(admin_required)):
         raise failure(exc)
 
 
+@router.post("/upgrade", status_code=202)
+async def upgrade(admin=Depends(admin_required)):
+    try:
+        return await get_update_service().start("upgrade", admin.get("username"))
+    except UpdateError as exc:
+        raise failure(exc)
+
+
 @router.post("/backup", status_code=202)
 async def backup(admin=Depends(admin_required)):
     try:

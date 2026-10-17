@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit, unquote
@@ -84,23 +86,44 @@ class UpdateService:
         container = os.getenv("MONITOR_DEPLOYMENT") == "docker" or Path("/.dockerenv").exists()
         writable = os.access(self.store.root / "app", os.W_OK) and os.access(self.store.root / "scripts", os.W_OK)
         supported = managed and writable and not container
+        setup = None
         if container:
+            code = "container"
             reason = "容器部署请更新镜像并重建容器；这里仍可检查版本和查看更新说明。"
         elif not managed:
+            code = "manager_required"
             reason = "在线应用和重启需要用 python scripts/run_server.py 启动服务。"
+            args = [sys.executable, "scripts/run_server.py", "--host", "0.0.0.0", "--port", "8080"]
+            command = subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)
+            setup = {"working_directory":str(self.store.root), "command":command}
         elif not writable:
+            code = "read_only"
             reason = "当前服务用户没有程序目录写入权限。"
         else:
+            code = "managed"
             reason = "升级前自动备份程序，保留配置与数据；健康检查失败自动恢复程序和运行环境。"
-        return {"can_apply":supported, "managed":managed, "reason":reason}
+        return {"can_apply":supported, "managed":managed, "reason":reason, "code":code, "setup":setup}
 
     def status(self):
         value = self.store.read()
-        # 磁盘事务状态可跨重启读取。进程内任务异常退出留下的状态允许重新操作。
-        if value.get("state") in {"checking", "downloading", "backing_up"}:
+        # 一键任务在 check/download 两步之间短暂落在 available/ready；
+        # 页面刷新须保持活跃任务，进程退出后又须能恢复这些中间状态。
+        transient = {"checking", "downloading", "backing_up"}
+        def unfinished_pipeline(state):
+            workflow = state.get("workflow")
+            return (state.get("state") in {"available", "ready"}
+                    and isinstance(workflow, dict) and workflow.get("mode") == "upgrade")
+        if value.get("state") in transient or unfinished_pipeline(value):
             try:
                 with self.store.lock():
-                    value = self.store.status("error", "上一次操作被中断，可以重新检查或下载")
+                    # 等锁前读到的状态可能已被另一进程完成，取得锁后重新判断。
+                    value = self.store.read()
+                    if value.get("state") in transient:
+                        value = self.store.status("error", "上一次操作被中断，可以重新检查或下载", workflow=None)
+                    elif (unfinished_pipeline(value)
+                          and not (self.store.home / "command.json").exists()
+                          and not (self.store.home / "transaction.json").exists()):
+                        value = self.store.status("error", "上一次一键更新被中断，请重新发起更新", workflow=None)
             except UpdateBusy:
                 pass
         if value.get("release"):
@@ -235,21 +258,29 @@ class UpdateService:
             raise
 
     async def start(self, action, actor="admin"):
-        if action not in ("check", "download", "backup"):
+        if action not in ("check", "download", "backup", "upgrade"):
             raise UpdateError("未知操作")
         self.status()  # 恢复没有活跃锁的中断状态。
         lock = self.store.lock()
         lock.__enter__()
         try:
             self.store.ensure_idle()
+            if action == "upgrade":
+                # 一键升级须先具备应用能力，避免下载后才发现无法继续。
+                self._require_manager()
             network = load_update_proxy(self.store.root)
-            if action in ("check", "download"):
+            if action in ("check", "download", "upgrade"):
                 ensure_proxy_enabled(network)
             if action == "check" and time.monotonic()-self._last_check < 30:
+                current = self.store.read()
+                self.store.status(current["state"], current["message"], current.get("progress", 0), workflow=None)
                 return self.status()
             route_name = "通过代理" if network["enabled"] else "直连"
-            self.store.status({"check":"checking", "download":"downloading", "backup":"backing_up"}[action],
-                              {"check":f"正在{route_name}检查GitHub版本", "download":f"正在{route_name}准备下载", "backup":"正在备份程序文件"}[action], 0, error=None)
+            workflow = {"mode":"upgrade", "id":uuid.uuid4().hex} if action == "upgrade" else None
+            self.store.status({"check":"checking", "download":"downloading", "backup":"backing_up", "upgrade":"checking"}[action],
+                              {"check":f"正在{route_name}检查GitHub版本", "download":f"正在{route_name}准备下载",
+                               "backup":"正在备份程序文件", "upgrade":f"一键升级：正在{route_name}检查GitHub版本"}[action],
+                              0, error=None, workflow=workflow, failed_state=None)
             self.audit(action, actor, "started")
             active_lock = lock
             async def work():
@@ -258,15 +289,23 @@ class UpdateService:
                         await self.check()
                     elif action == "download":
                         await self.download()
+                    elif action == "upgrade":
+                        await self.check()
+                        if self.store.read().get("state") == "available":
+                            await self.download()
+                            # 检查、下载、排队交接共用同一把锁，不依赖浏览器连接。
+                            # 下载可能耗时较长，因此交接前重新验证管理器仍在线。
+                            self._queue_operation_locked("apply", actor, workflow_id=workflow["id"])
                     else:
                         backup = await asyncio.to_thread(self.store.backup)
                         staged = read_json(self.store.home / "staged.json")
                         next_state = "ready" if staged and Version(staged["version"]) > Version(self.version) else "idle"
                         self.store.status(next_state, "程序备份已创建", 100, last_backup=backup["name"])
-                    self.audit(action, actor, "completed")
+                    self.audit(action, actor, "queued" if action == "upgrade" and self.store.read().get("state") == "queued" else "completed")
                 except Exception as exc:
+                    failed_state = self.store.read().get("state")
                     message = str(exc) if isinstance(exc, UpdateError) else f"操作失败（{type(exc).__name__}），请检查网络和运行环境后重试"
-                    self.store.status("error", message, error=message)
+                    self.store.status("error", message, error=message, failed_state=failed_state)
                     self.audit(action, actor, "failed")
                 finally:
                     active_lock.__exit__(None, None, None)
@@ -277,28 +316,39 @@ class UpdateService:
             if lock:
                 lock.__exit__(None, None, None)
 
+    def _require_manager(self):
+        capability = self.capability()
+        if not capability["can_apply"]:
+            raise UpdateError(capability["reason"])
+        if package_version(self.store.root) != self.version:
+            raise UpdateError("磁盘代码与运行版本不一致，请先重启")
+
+    def _queue_operation_locked(self, action, actor, backup=None, workflow_id=None):
+        """调用方持有操作锁；与异步流水线共享交接逻辑，避免嵌套取锁。"""
+        self._require_manager()
+        if action == "apply":
+            ensure_proxy_enabled(load_update_proxy(self.store.root))
+            staged = read_json(self.store.home / "staged.json")
+            if self.store.read().get("state") != "ready" or not staged or Version(staged["version"]) <= Version(self.version):
+                raise UpdateError("请先下载并校验新版本")
+        if action == "rollback":
+            self.store.backup_manifest(backup or "")
+        command = {"id":uuid.uuid4().hex, "action":action, "backup":backup,
+                   "actor":str(actor)[:100], "session":os.environ["MONITOR_UPDATE_SESSION"]}
+        if workflow_id:
+            command["workflow_id"] = workflow_id
+        self.audit(action, actor, "queued")
+        extra = {} if workflow_id else {"workflow":None}
+        self.store.status("queued", "任务已提交，正在准备" if action != "restart" else "正在准备重启",
+                          operation_id=command["id"], error=None, **extra)
+        atomic_json(self.store.home / "command.json", command)
+
     def request_operation(self, action, actor, backup=None):
         if action not in ("apply", "rollback", "restart"):
             raise UpdateError("未知操作")
         with self.store.lock():
             self.store.ensure_idle()
-            capability = self.capability()
-            if not capability["can_apply"]:
-                raise UpdateError(capability["reason"])
-            if package_version(self.store.root) != self.version:
-                raise UpdateError("磁盘代码与运行版本不一致，请先重启")
-            if action == "apply":
-                ensure_proxy_enabled(load_update_proxy(self.store.root))
-                staged = read_json(self.store.home / "staged.json")
-                if self.store.read().get("state") != "ready" or not staged or Version(staged["version"]) <= Version(self.version):
-                    raise UpdateError("请先下载并校验新版本")
-            if action == "rollback":
-                self.store.backup_manifest(backup or "")
-            command = {"id":uuid.uuid4().hex, "action":action, "backup":backup,
-                       "actor":str(actor)[:100], "session":os.environ["MONITOR_UPDATE_SESSION"]}
-            self.audit(action, actor, "queued")
-            self.store.status("queued", "任务已提交，正在准备" if action != "restart" else "正在准备重启", operation_id=command["id"], error=None)
-            atomic_json(self.store.home / "command.json", command)
+            self._queue_operation_locked(action, actor, backup)
         return self.status()
 
 
