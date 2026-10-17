@@ -130,6 +130,7 @@ class ServerManager:
         self.stopping = False
         self.token = None
         self.child_env = None
+        self._pending_completion = None
         self.python = read_json(self.store.home / "runtime.json", {"python":sys.executable})["python"]
         if not Path(self.python).is_file():
             # 文件事务尚未提交时，新依赖环境可能因中断而缺失。
@@ -152,6 +153,8 @@ class ServerManager:
         return {**{k:v for k,v in values.items() if v is not None}, **os.environ}
 
     def start_child(self):
+        if self.child is not None and self.child.poll() is None:
+            raise UpdateError("当前服务进程仍在运行，不能重复启动")
         self.token = uuid.uuid4().hex
         env = {**self.environment(), "MONITOR_UPDATE_SESSION":self.session, "MONITOR_INSTANCE":self.token,
                "PYTHONUNBUFFERED":"1"}
@@ -301,9 +304,48 @@ class ServerManager:
         finally:
             lock.__exit__(None, None, None)
 
+    def _storage_warning(self, message):
+        # 不回显底层异常内容，避免路径或子进程环境中的凭据进入日志。
+        try:
+            print("[更新管理器] " + message, file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass
+
+    def _persist_completion(self):
+        pending = self._pending_completion
+        if pending is None:
+            return
+        warning = pending.get("warning")
+        try:
+            self.store.status("complete", pending["message"] + ("；" + warning if warning else ""), 100,
+                              error=None, failed_state=None, warning=warning, **pending["extra"])
+        except (OSError, ValueError):
+            if not pending.get("status_warning"):
+                warning = "完成状态写入失败，服务保持运行；请检查 .updates 目录权限与磁盘空间，管理器会重试"
+                pending["warning"] = (pending["warning"] + "；" if pending.get("warning") else "") + warning
+                pending["status_warning"] = True
+                self._storage_warning(warning)
+        else:
+            self._pending_completion = None
+
+    def _complete_operation(self, message, *, cleanup_staged=False, warning=None, **extra):
+        # 只有健康检查及文件事务提交均成功后才能调用；后续记录失败不能再改动进程。
+        if cleanup_staged:
+            try:
+                (self.store.home / "staged.json").unlink(missing_ok=True)
+            except OSError:
+                cleanup_warning = "升级包记录清理失败，服务保持运行；请检查 .updates 目录权限与磁盘空间"
+                warning = (warning + "；" if warning else "") + cleanup_warning
+                self._storage_warning(cleanup_warning)
+        self._pending_completion = {"message":message, "extra":extra, "warning":warning}
+        self._persist_completion()
+        if self._pending_completion is not None:
+            self._persist_completion()  # 短暂写入失败先重试一次，持续失败交给管理器循环。
+
     def _execute_locked(self, request):
         old_python = self.python
         backup, transaction, stopped = None, None, False
+        committed = False
         # 锁由 execute 持有，贯穿备份、替换、重启和失败恢复。
         try:
             if (self.store.home / "transaction.json").exists():
@@ -317,7 +359,8 @@ class ServerManager:
                 self.start_child()
                 if not self.healthy(package_version(self.root)):
                     raise UpdateError("重启后的健康检查未通过")
-                self.store.status("complete", "服务已重启并通过健康检查", 100)
+                committed = True
+                self._complete_operation("服务已重启并通过健康检查")
                 return
 
             self.store.status("preparing", "正在校验文件与准备运行环境", 10)
@@ -366,9 +409,16 @@ class ServerManager:
                 raise UpdateError("新版本健康检查未通过")
             (self.store.home / "transaction.json").unlink()
             transaction = None
-            (self.store.home / "staged.json").unlink(missing_ok=True)
-            self.store.status("complete", "升级完成，服务健康" if action == "apply" else "程序已回滚，服务健康", 100, staged=None, rolled_back=False)
+            committed = True
+            self._complete_operation("升级完成，服务健康" if action == "apply" else "程序已回滚，服务健康",
+                                     cleanup_staged=True, staged=None, rolled_back=False)
         except Exception as exc:
+            if committed:
+                # 提交后的异常只影响记录，绝不切回旧解释器或覆盖健康子进程引用。
+                warning = f"服务已完成切换，后续记录处理失败（{type(exc).__name__}），请检查本机升级目录"
+                self._storage_warning(warning)
+                self._complete_operation("操作已完成，服务健康", warning=warning, rolled_back=False)
+                return
             failed_state = self.store.read().get("state")
             message = str(exc) if isinstance(exc, UpdateError) else f"升级处理失败（{type(exc).__name__}）"
             restored = False
@@ -393,9 +443,13 @@ class ServerManager:
             self.store.status("error", message + ("；已自动恢复升级前程序与依赖" if restored else ""), 100,
                               error=message, rolled_back=restored, failed_state=failed_state)
         finally:
-            with (self.store.home / "history.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"time":time.time(), "action":request.get("action"), "actor":request.get("actor"),
-                                    "result":self.store.read().get("state")}, ensure_ascii=False) + "\n")
+            try:
+                result = "complete" if committed else self.store.read().get("state")
+                with (self.store.home / "history.jsonl").open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"time":time.time(), "action":request.get("action"), "actor":request.get("actor"),
+                                        "result":result}, ensure_ascii=False) + "\n")
+            except (OSError, ValueError):
+                self._storage_warning("升级审计日志写入失败，服务进程保持当前状态；请检查 .updates 目录权限与磁盘空间")
 
     def run(self):
         with OperationLock(self.store.home / "manager.lock"):
@@ -423,6 +477,16 @@ class ServerManager:
                         if future and future.done():
                             future.result()
                             future = None
+                        if not future and self._pending_completion is not None:
+                            try:
+                                with self.store.lock():
+                                    if (self.store.home / "command.json").exists():
+                                        # 新任务已被接收时，不用旧任务终态覆盖它。
+                                        self._pending_completion = None
+                                    else:
+                                        self._persist_completion()
+                            except UpdateBusy:
+                                pass
                         command = read_json(self.store.home / "command.json")
                         if command and not future:
                             (self.store.home / "command.json").unlink()
